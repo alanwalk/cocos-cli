@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { unzipSync } from "fflate";
@@ -137,15 +137,20 @@ export async function manageFunplayExtension(options: ExtensionOptions) {
     return withProjectLock(lockRoot, async () => {
         await ensureDirectory(extensions);
         const localPath = join(root, "extensions", EXTENSION);
-        const projectOverridePath = options.global && await inspectPath(localPath) ? localPath : null;
+        const localManifest = options.global ? await inspectPath(join(localPath, "package.json")) : null;
+        const projectOverridePath = localManifest?.isFile() ? localPath : null;
         const result = { ok: true, scope, creatorVersion, projectRoot: root, extensionPath, projectOverridePath };
         const installed = await inspectPath(extensionPath);
+        if (installed && (!installed.isDirectory() || installed.isSymbolicLink())) {
+            throw fail("FUNPLAY_UNSAFE_PATH", "Funplay 安装路径必须是真实目录", [extensionPath]);
+        }
+        const emptyPlaceholder = installed !== null && (await readdir(extensionPath)).length === 0;
         let previousVersion: string | null = null;
-        if (installed) {
-            if (!installed.isDirectory() || installed.isSymbolicLink()) {
-                throw fail("FUNPLAY_UNSAFE_PATH", "Funplay 安装路径必须是真实目录", [extensionPath]);
-            }
+        if (installed && !emptyPlaceholder) {
             const packagePath = join(extensionPath, "package.json");
+            if (!(await inspectPath(packagePath))?.isFile()) {
+                throw fail("FUNPLAY_INVALID_INSTALLATION", "Funplay 目录内已有文件，但缺少有效的 package.json，已保留原目录", [extensionPath]);
+            }
             const manifest = readJsonFile(packagePath, "Funplay 扩展配置");
             if (manifest?.name !== EXTENSION || !VERSION.test(manifest.version ?? "")) {
                 throw fail("FUNPLAY_INVALID_INSTALLATION", "安装目录不是可识别的 Funplay 扩展", [packagePath]);
@@ -188,6 +193,7 @@ export async function manageFunplayExtension(options: ExtensionOptions) {
         const { directory } = getProjectStatePaths(lockRoot);
         const staging = await mkdtemp(join(directory, "funplay-stage-"));
         let backupPath: string | null = null;
+        let removedPlaceholder = false;
         try {
             await prepareRelease(version, archive, staging);
             signal.throwIfAborted();
@@ -196,9 +202,15 @@ export async function manageFunplayExtension(options: ExtensionOptions) {
                 if (current.dev !== installed.dev || current.ino !== installed.ino || current.mtimeMs !== installed.mtimeMs) {
                     throw fail("FUNPLAY_INSTALLATION_CHANGED", "安装目录在下载时发生变化，请重新执行命令", [extensionPath]);
                 }
-                const backupRoot = await mkdtemp(join(directory, "funplay-backup-"));
-                backupPath = join(backupRoot, EXTENSION);
-                await rename(extensionPath, backupPath);
+                if (emptyPlaceholder) {
+                    // Git may leave an uninitialized submodule as an empty directory.
+                    await rmdir(extensionPath);
+                    removedPlaceholder = true;
+                } else {
+                    const backupRoot = await mkdtemp(join(directory, "funplay-backup-"));
+                    backupPath = join(backupRoot, EXTENSION);
+                    await rename(extensionPath, backupPath);
+                }
             } else if (await inspectPath(extensionPath)) {
                 throw fail("FUNPLAY_INSTALLATION_CHANGED", "安装目录在下载时发生变化，请重新执行命令", [extensionPath]);
             }
@@ -212,6 +224,12 @@ export async function manageFunplayExtension(options: ExtensionOptions) {
                     } catch {
                         throw fail("FUNPLAY_RESTORE_FAILED", "更新失败且无法恢复原扩展", [backupPath, extensionPath]);
                     }
+                } else if (removedPlaceholder) {
+                    await mkdir(extensionPath).catch((restoreError) => {
+                        if (restoreError.code !== "EEXIST") {
+                            throw fail("FUNPLAY_RESTORE_FAILED", "安装失败且无法恢复空目录", [extensionPath]);
+                        }
+                    });
                 }
                 throw error;
             }

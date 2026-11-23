@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { strToU8, zipSync } from "fflate";
@@ -68,4 +68,34 @@ test("global setup uses the declared Creator version and reports a project insta
     });
     assert.equal(result.extensionPath, join(homeDirectory, ".CocosCreator", "builtin-extensions", "3.8.7", "funplay-cocos-mcp"));
     assert.equal(result.projectOverridePath, local.extensionPath);
+});
+
+test("setup fills an empty submodule directory and preserves an incomplete nonempty directory", async (t) => {
+    const fixture = createProjectFixture();
+    t.after(fixture.cleanup);
+    const project = { root: fixture.root, creatorVersion: "3.8.8" };
+    const target = join(project.root, "extensions", "funplay-cocos-mcp");
+    mkdirSync(target, { recursive: true });
+    await assert.rejects(manageFunplayExtension({
+        project, operation: "update", fetchImpl: () => assert.fail("must not fetch"),
+    }), { code: "FUNPLAY_NOT_INSTALLED" });
+    const localFile = join(target, ".git");
+    writeFileSync(localFile, "gitdir: existing");
+    await assert.rejects(manageFunplayExtension({
+        project, operation: "setup", fetchImpl: () => assert.fail("must not fetch"),
+    }), { code: "FUNPLAY_INVALID_INSTALLATION" });
+    assert.equal(readFileSync(localFile, "utf8"), "gitdir: existing");
+    const empty = createProjectFixture();
+    t.after(empty.cleanup);
+    const emptyProject = { ...project, root: empty.root };
+    const emptyTarget = join(empty.root, "extensions", "funplay-cocos-mcp");
+    mkdirSync(emptyTarget, { recursive: true });
+    await assert.rejects(manageFunplayExtension({
+        project: emptyProject, operation: "setup", fetchImpl: fakeRelease("0.7.6", { wrongChecksum: true }),
+    }), { code: "FUNPLAY_CHECKSUM_MISMATCH" });
+    assert.deepEqual(readdirSync(emptyTarget), []);
+    const installed = await manageFunplayExtension({ project: emptyProject, operation: "setup", fetchImpl: fakeRelease("0.7.6") });
+    assert.equal(installed.changed, true);
+    assert.equal(installed.backupPath, null);
+    assert.equal(readFileSync(join(emptyTarget, "browser.js"), "utf8"), "version 0.7.6");
 });

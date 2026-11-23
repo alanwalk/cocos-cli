@@ -130,7 +130,7 @@ cocos mcp ensure --project $project --json
 cocos mcp register --project $project --client codex
 ```
 
-- `setup` 从 GitHub 下载最新稳定版并校验 SHA256，默认安装到项目的 `extensions/funplay-cocos-mcp`。已有安装时返回当前版本。
+- `setup` 从 GitHub 下载最新稳定版并校验 SHA256，默认安装到项目的 `extensions/funplay-cocos-mcp`。空的扩展目录也可用于首次安装。已有有效安装时返回当前版本。
 - `--global` 用于 `setup` 和 `update`，目标是 `~/.CocosCreator/builtin-extensions/<creator.version>/funplay-cocos-mcp`。版本取自目标项目。若项目和全局扩展同时存在，Creator 优先加载项目副本。
 - `update` 更新所选范围内已安装的 Release，保持原版本或升级到新版本。替换前保存一份备份，返回 `backupPath`。Git 工作副本使用 Git 更新。安装或更新后，在 Creator 中打开或重开项目。
 - `register` 验证当前项目在线的 Funplay 端点，并为指定 Agent 注册 MCP，补齐缺失的 Workflow 和 UI Composition Skills。重复运行时保留现有 Skill、旧目录安装和用户修改。请重新加载客户端，再由 Agent 直接调用 Funplay 工具。
