@@ -42,6 +42,12 @@ cocos --help
 - 打包内容包含 `bin/cocos.js`、`dist/*.js` 和 `dist/*.d.ts`。包的 JavaScript 和类型入口分别为 `dist/index.js` 和 `dist/index.d.ts`。
 - 在独立安装环境验证 tarball 装出的 `cocos`。使用 `npm pack --dry-run --ignore-scripts --json` 查看已编译目录的清单时，先运行一次 `npm run build`。
 
+### npm 自动发布
+
+`.github/workflows/npm-publish.yml` 在 GitHub Release 发布时触发。Release tag 必须与 `package.json` 一致，例如版本 `1.0.0` 对应 `v1.0.0`。Windows、macOS 和 Linux 的打包验收通过后，Ubuntu job 使用 npm Trusted Publishing 发布。正式版用 `latest`，预发布版用 `next`。
+
+在 npm 包设置的 **Trusted Publishing** 中添加 GitHub Actions，组织或用户填写 `alanwalk`，仓库填写 `cocos-cli`，工作流文件名填写 `npm-publish.yml`，并允许 `npm publish`。如果包还未在 registry 建档，先由有权限的账号完成首次发布，再为后续版本配置此流程。 [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/)
+
 ## 2. 离线创建、检查和查询
 
 用尚不存在的 A、B 两个目录。保持目标 Creator 项目关闭，避免编辑器自动生成修复文件。
