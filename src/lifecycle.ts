@@ -366,12 +366,15 @@ export async function openProjectWindow(options: LifecycleOptions) {
                 windowsHide: options.windowMode === "background",
             });
         }
+        const windowsBackground = options.windowMode === "background" && (options.platform ?? process.platform) === "win32";
         const window = await dep.setEditorWindow({
             pid,
             mode: options.windowMode,
             timeoutMs: deadline - dep.now(),
             env: options.env,
             previousForeground,
+            backgroundStartup: windowsBackground && !reused,
+            keepInBackground: windowsBackground,
         });
         return { ok: true, projectRoot: options.project.root, pid, reused, launched: !reused, window };
     }, { timeoutMs });

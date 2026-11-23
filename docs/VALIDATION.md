@@ -86,7 +86,7 @@ cocos open --project $projectA --foreground --json
 cocos open --project $projectA --background --json
 ```
 
-三次都核对 `window.visible: true` 和同一 PID，后两次应返回 `reused: true`。普通 `open` 和显式 `--background` 均返回 `window.mode: "background"`。运行这两条命令前先切到其他应用，核对执行后 Creator 主窗口显示、原应用仍在前台。显式 `--foreground` 会请求焦点，用 `window.frontmost` 检查 Creator 是否在前台。macOS 的 `window.focused: null` 表示 Creator 位于前台且主窗口的键盘焦点未核实。在 Funplay 离线时也可运行窗口操作。需要等待编辑器退出时单测 `open --wait`。
+三次都核对 `window.visible: true` 和同一 PID，后两次应返回 `reused: true`。普通 `open` 和显式 `--background` 均返回 `window.mode: "background"`。执行前先切到其他应用。在 Windows 上观察冷启动期间的 Loading 和就绪后的主窗口，确认当前应用没有被盖住且仍可接收键盘输入。任务栏应保留 Creator 图标，命令返回后图标应停止闪烁。点击图标应能切到同一 PID 的窗口。复用已最小化的窗口时，应保留最小化状态。显式 `--foreground` 会请求焦点，用 `window.frontmost` 检查 Creator 是否在前台。macOS 的 `window.focused: null` 表示 Creator 位于前台且主窗口的键盘焦点未核实。在 Funplay 离线时也可运行窗口操作。需要等待编辑器退出时单测 `open --wait`。
 
 启用该项目的 Funplay 服务后，执行：
 

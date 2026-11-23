@@ -14,6 +14,21 @@ using System.Runtime.InteropServices;
 using System.Text;
 
 public static class CreatorWindow {
+    private const int ExtendedStyle = -20;
+    private const int NoActivate = 0x08000000;
+    private const int Layered = 0x00080000;
+    private const int AppWindow = 0x00040000;
+    private const uint Alpha = 0x00000002;
+    private const uint ShowWindowFlag = 0x0040;
+    private const uint KeepGeometryAndFocus = 0x0001 | 0x0002 | 0x0010 | 0x0200; // NOSIZE | NOMOVE | NOACTIVATE | NOOWNERZORDER
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FlashInfo {
+        public uint Size;
+        public IntPtr Window;
+        public uint Flags;
+        public uint Count;
+        public uint Timeout;
+    }
     private delegate bool WindowCallback(IntPtr window, IntPtr state);
     [DllImport("user32.dll")] private static extern bool EnumWindows(WindowCallback callback, IntPtr state);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
@@ -24,6 +39,47 @@ public static class CreatorWindow {
     [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr window, int command);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr window, int index);
+    [DllImport("user32.dll")] private static extern int SetWindowLong(IntPtr window, int index, int value);
+    [DllImport("user32.dll")] private static extern bool SetLayeredWindowAttributes(IntPtr window, uint colorKey, byte alpha, uint flags);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll")] private static extern bool FlashWindowEx(ref FlashInfo info);
+
+    public static int PrepareBackgroundStartup(IntPtr window) {
+        int style = GetWindowLong(window, ExtendedStyle);
+        int added = (NoActivate | Layered) & ~style;
+        // Explorer needs APPWINDOW to create a taskbar button while NOACTIVATE is set.
+        SetWindowLong(window, ExtendedStyle, style | added | AppWindow);
+        if ((added & Layered) != 0 && !SetLayeredWindowAttributes(window, 0, 0, Alpha)) {
+            RestoreStartupStyle(window, Layered);
+            added &= ~Layered;
+        }
+        return added;
+    }
+
+    public static void RestoreStartupStyle(IntPtr window, int added) {
+        if (added == 0) return;
+        if ((added & Layered) != 0) SetLayeredWindowAttributes(window, 0, 255, Alpha);
+        int style = GetWindowLong(window, ExtendedStyle);
+        SetWindowLong(window, ExtendedStyle, style & ~added);
+    }
+
+    public static bool PlaceInBackground(IntPtr window, bool show) {
+        uint flags = KeepGeometryAndFocus;
+        if (show) flags |= ShowWindowFlag;
+        return SetWindowPos(window, new IntPtr(1), 0, 0, 0, 0, flags); // HWND_BOTTOM
+    }
+
+    public static void StopTaskbarFlash(IntPtr window) {
+        var info = new FlashInfo {
+            Size = (uint)Marshal.SizeOf(typeof(FlashInfo)),
+            Window = window,
+            Flags = 0, // FLASHW_STOP
+            Count = 0,
+            Timeout = 0
+        };
+        FlashWindowEx(ref info);
+    }
 
     public static bool Owns(IntPtr window, int pid) {
         uint owner;
@@ -64,7 +120,30 @@ while ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $deadlineAt) {
 if ($window -eq [IntPtr]::Zero) { throw 'Creator main window was not found.' }
 
 $activate = $windowMode -eq 'foreground'
-if ($activate) {
+if ($keepInBackground) {
+    $startupStyle = 0
+    try {
+        if ($backgroundStartup -and -not [CreatorWindow]::IsWindowVisible($window)) {
+            # Creator raises the Loading window on its first show. Position it before it can paint over the current app.
+            $startupStyle = [CreatorWindow]::PrepareBackgroundStartup($window)
+            while (-not [CreatorWindow]::IsWindowVisible($window) -and [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt ($deadlineAt - 500)) {
+                if ($creator.HasExited) { throw 'Creator exited during startup.' }
+                Start-Sleep -Milliseconds 25
+            }
+        }
+        $hidden = -not [CreatorWindow]::IsWindowVisible($window)
+        $current = [CreatorWindow]::GetForegroundWindow()
+        if ($hidden -or -not [CreatorWindow]::Owns($current, $creatorPid)) {
+            if (-not [CreatorWindow]::PlaceInBackground($window, $hidden)) {
+                throw 'Could not place the Creator main window in the background.'
+            }
+        }
+    } finally {
+        if ([CreatorWindow]::Owns($window, $creatorPid)) {
+            [CreatorWindow]::RestoreStartupStyle($window, $startupStyle)
+        }
+    }
+} elseif ($activate) {
     if ([CreatorWindow]::IsIconic($window)) {
         [void][CreatorWindow]::ShowWindowAsync($window, 9)
     } elseif (-not [CreatorWindow]::IsWindowVisible($window)) {
@@ -77,7 +156,7 @@ if ($activate) {
 $restoreDeadline = 0
 while ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $deadlineAt) {
     if ($creator.HasExited) { throw 'Creator exited during the window change.' }
-    if ([CreatorWindow]::IsWindowVisible($window) -and -not [CreatorWindow]::IsIconic($window)) {
+    if ([CreatorWindow]::IsWindowVisible($window) -and ($keepInBackground -or -not [CreatorWindow]::IsIconic($window))) {
         if ($activate) { [void][CreatorWindow]::SetForegroundWindow($window) }
         $current = [CreatorWindow]::GetForegroundWindow()
         $frontmost = [CreatorWindow]::Owns($current, $creatorPid)
@@ -91,6 +170,7 @@ while ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $deadlineAt) {
                 continue
             }
         }
+        if ($keepInBackground -and -not $frontmost) { [CreatorWindow]::StopTaskbarFlash($window) }
         @{ visible = $true; focused = ($current -eq $window); frontmost = $frontmost } | ConvertTo-Json -Compress
         exit
     }
@@ -224,12 +304,14 @@ export async function captureForegroundWindow({ timeoutMs, env }: { timeoutMs: n
     }
 }
 
-export async function setEditorWindow({ pid, mode, timeoutMs, env, previousForeground }: {
+export async function setEditorWindow({ pid, mode, timeoutMs, env, previousForeground, backgroundStartup = false, keepInBackground = false }: {
     pid: number;
     mode: WindowMode;
     timeoutMs: number;
     env?: NodeJS.ProcessEnv;
     previousForeground?: string | null;
+    backgroundStartup?: boolean;
+    keepInBackground?: boolean;
 }) {
     assertWindowMode(mode);
     if (!Number.isSafeInteger(pid) || pid <= 0 || timeoutMs <= 0) {
@@ -237,9 +319,14 @@ export async function setEditorWindow({ pid, mode, timeoutMs, env, previousForeg
     }
     const deadlineAt = Date.now() + timeoutMs;
     const previous = previousForeground && /^[1-9]\d*$/.test(previousForeground) ? previousForeground : "0";
-    const windowsScript = `$creatorPid = ${pid}\n$windowMode = '${mode}'\n$deadlineAt = ${deadlineAt}\n$previousForeground = [IntPtr]([int64]${previous})\n${WINDOWS_WINDOW_API}${WINDOWS_WINDOW_SCRIPT}`;
+    const windowsBackground = mode === "background" && process.platform === "win32";
+    const startup = windowsBackground && backgroundStartup;
+    const keepBehind = windowsBackground && keepInBackground;
+    const windowsScript = `$creatorPid = ${pid}\n$windowMode = '${mode}'\n$deadlineAt = ${deadlineAt}\n$previousForeground = [IntPtr]([int64]${previous})\n$backgroundStartup = $${startup}\n$keepInBackground = $${keepBehind}\n${WINDOWS_WINDOW_API}${WINDOWS_WINDOW_SCRIPT}`;
     try {
-        const { stdout } = await runWindowScript(windowsScript, MACOS_WINDOW_SCRIPT, [String(pid), String(deadlineAt), mode, previous], timeoutMs, env);
+        // The Windows helper needs time to restore the temporary styles after its own deadline.
+        const scriptTimeoutMs = startup ? timeoutMs + 1000 : timeoutMs;
+        const { stdout } = await runWindowScript(windowsScript, MACOS_WINDOW_SCRIPT, [String(pid), String(deadlineAt), mode, previous], scriptTimeoutMs, env);
         const outcome = JSON.parse(stdout);
         if (outcome.visible !== true || typeof outcome.frontmost !== "boolean"
             || (typeof outcome.focused !== "boolean" && outcome.focused !== null)) {

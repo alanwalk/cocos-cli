@@ -21,7 +21,7 @@ npx @alanwalk/cocos-cli --version
 | --- | --- |
 | `cocos create --project <新目录> --type 2d` | 用本机 Creator 3.8.8 模板创建项目，支持 `2d` 和 `3d`。 |
 | `cocos info` | 查看项目和编辑器版本。 |
-| `cocos open [--foreground]` | 打开 Creator 项目。Windows 和 macOS 默认显示主窗口且不请求焦点，等同于 `--background`。显式传 `--foreground` 可请求焦点。 |
+| `cocos open [--foreground]` | 打开 Creator 项目。Windows 默认在后台启动，可从任务栏打开窗口。macOS 默认显示主窗口且不请求焦点。显式传 `--foreground` 可请求焦点。 |
 | `cocos check` | 检查 Meta、重复 UUID 和无效序列化引用。 |
 | `cocos asset refs <路径或UUID>` | 查找磁盘文本资源中的序列化引用。 |
 | `cocos prefab inspect <文件>` / `cocos prefab diff <旧文件> <新文件>` | 只读查看 Prefab 结构或比较字段。 |

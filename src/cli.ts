@@ -148,7 +148,11 @@ async function runOpen(options: Required<CliContext>, values: CliValues) {
         } else {
             options.output(`项目: ${result.projectRoot}`);
             if (result.launched) options.output(`已启动 Creator (PID ${result.pid})`);
-            printWindowResult(result.window, options.output);
+            if (options.platform === "win32" && result.window.mode === "background" && !result.window.frontmost) {
+                options.output("Creator 正在后台运行，可从 Windows 任务栏打开。");
+            } else {
+                printWindowResult(result.window, options.output);
+            }
         }
         return 0;
     }

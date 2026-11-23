@@ -99,19 +99,28 @@ test("background and foreground open share a Creator without probing MCP", async
         assert.equal(options.windowsHide, true);
         return launch(command, args, options);
     };
-    h.deps.setEditorWindow = async ({ pid, mode }) => {
+    const windowRequests = [];
+    h.deps.setEditorWindow = async ({ pid, mode, backgroundStartup, keepInBackground }) => {
         assert.equal(pid, 4242);
+        windowRequests.push({ mode, backgroundStartup, keepInBackground });
         return { mode, visible: true, focused: false, frontmost: false };
     };
 
     const background = await openProjectWindow({ ...h.options, windowMode: "background" });
+    const reused = await openProjectWindow({ ...h.options, windowMode: "background" });
     const foreground = await openProjectWindow({ ...h.options, windowMode: "foreground" });
     assert.equal(background.launched, true);
     assert.equal(background.window.visible, true);
+    assert.equal(reused.reused, true);
     assert.equal(foreground.reused, true);
     assert.equal(h.state.launches, 1);
     assert.equal(foreground.window.visible, true);
     assert.equal(h.state.toolCalls.length, 0);
+    assert.deepEqual(windowRequests, [
+        { mode: "background", backgroundStartup: true, keepInBackground: true },
+        { mode: "background", backgroundStartup: false, keepInBackground: true },
+        { mode: "foreground", backgroundStartup: false, keepInBackground: false },
+    ]);
 });
 
 test("macOS background and explicit foreground opens reuse the same Creator", async (t) => {

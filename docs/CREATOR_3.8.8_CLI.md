@@ -76,6 +76,6 @@ $project = 'D:\Games\MyGame'
 
 - `cocos open` 调用 Creator 可执行文件并传入 `--project`。`cocos build` 另外传入 Creator 原生的 `--build` 参数。
 - `cocos mcp ensure`、`cocos mcp status`、`cocos mcp doctor`、`cocos mcp stop` 和 `cocos mcp restart` 通过 Funplay 管理或查询项目的编辑器实例。
-- 在 Windows 和 macOS 上，普通 `open` 默认采用 `--background`，显示 Creator 主窗口且不请求焦点。若 Creator 冷启动时自行切到前台，CLI 会尝试恢复原来的前台窗口或应用。显式传 `--foreground` 时，CLI 会请求焦点。`open` 的窗口操作无需 Funplay。
+- 在 Windows 和 macOS 上，普通 `open` 默认采用 `--background`。Windows 的 Loading 和主窗口在后台打开，当前应用保留键盘焦点，可以随时从任务栏切到 Creator。macOS 若在冷启动时自行切到前台，CLI 会尝试恢复先前的应用。显式传 `--foreground` 时，CLI 会显示主窗口并请求焦点。`open` 的窗口操作无需 Funplay。
 
 本机核对的安装包文件包括 `app.asar!/launch/source/launch.ts`、`app.asar!/node_modules/@editor/setting/lib/browser/index.js` 和构建器的 `builtin/builder/@types/public/options.d.ts`。其中构建器类型声明位于安装包的 unpacked 目录。
