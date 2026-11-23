@@ -3,220 +3,52 @@ import { dirname } from "node:path";
 import { checkAssets, findAssetReferences } from "./assets.js";
 import { createProject } from "./create.js";
 import { diffPrefabs, inspectPrefab } from "./prefab.js";
-import { parseArgs, type ParseArgsConfig } from "node:util";
+import { Command, CommanderError, InvalidArgumentError, Option } from "commander";
 
 import { assertBuildAllowed, createBuildArguments, resolveStartScene } from "./build.js";
 import { loadConfig } from "./config.js";
 import { resolveCreator } from "./creator.js";
 import { CocosCliError } from "./errors.js";
-import { assertEditorVersion, ensureProject, inspectProject, openProjectWindow, restartProject, stopProject } from "./lifecycle.js";
+import { manageFunplayExtension } from "./funplay-extension.js";
+import { assertEditorVersion, connectProjectMcp, ensureProject, inspectProject, openProjectWindow, restartProject, stopProject } from "./lifecycle.js";
+import { FUNPLAY_CLIENTS, registerFunplay, type FunplayClient } from "./funplay-register.js";
 import { loadProject } from "./project.js";
 import { packageManifest } from "./package-info.js";
 import { launchDetached, waitForChild } from "./runner.js";
 
-const CLI_OPTIONS = {
-    project: {
-        type: "string",
-        short: "p",
-    },
-    editor: {
-        type: "string",
-        short: "e",
-    },
-    config: {
-        type: "string",
-        short: "c",
-    },
-    json: {
-        type: "boolean",
-    },
-    wait: {
-        type: "boolean",
-    },
-    "wait-ready": { type: "boolean" },
-    foreground: { type: "boolean" },
-    type: { type: "string" },
-    "build-config": { type: "string" },
-    "log-dest": { type: "string" },
-    background: { type: "boolean" },
-    "mcp-url": { type: "string" },
-    "timeout-ms": { type: "string" },
-    "request-timeout-ms": { type: "string" },
-    "allow-unverified-editor": { type: "boolean" },
-    save: { type: "boolean" },
-    debug: {
-        type: "boolean",
-    },
-    release: {
-        type: "boolean",
-    },
-    "start-scene": {
-        type: "string",
-    },
-    option: {
-        type: "string",
-        multiple: true,
-    },
-    "skip-guard": {
-        type: "boolean",
-    },
-    "guard-url": {
-        type: "string",
-    },
-    help: {
-        type: "boolean",
-        short: "h",
-    },
-    version: {
-        type: "boolean",
-        short: "v",
-    },
-} as const satisfies ParseArgsConfig["options"];
+interface CliValues {
+    project?: string;
+    editor?: string;
+    config?: string;
+    json?: boolean;
+    global?: boolean;
+    wait?: boolean;
+    foreground?: boolean;
+    background?: boolean;
+    type?: string;
+    buildConfig?: string;
+    logDest?: string;
+    mcpUrl?: string;
+    client?: FunplayClient;
+    scope?: "project" | "user";
+    timeoutMs?: number;
+    requestTimeoutMs?: number;
+    allowUnverifiedEditor?: boolean;
+    save?: boolean;
+    debug?: boolean;
+    release?: boolean;
+    startScene?: string;
+    option?: string[];
+    skipGuard?: boolean;
+    guardUrl?: string;
+}
 
-type CliValues = ReturnType<typeof parseCliArguments>["values"];
 interface CliContext {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     platform?: NodeJS.Platform;
     output?: (message: string) => void;
     errorOutput?: (message: string) => void;
-}
-
-function formatHelp() {
-    return `@alanwalk/cocos-cli ${packageManifest.version}
-
-为 Funplay MCP 准备正确的 Cocos Creator 3.x 项目和连接。
-
-用法:
-  cocos create --project <目录> [--type 2d|3d]
-  cocos check [--project <目录>] [--json]
-  cocos asset refs <资源路径或 UUID> [--project <目录>] [--json]
-  cocos prefab inspect <文件> [--project <目录>] [--json]
-  cocos prefab diff <旧文件> <新文件> [--project <目录>] [--json]
-  cocos info [选项]
-  cocos ensure [选项]
-  cocos status [选项]
-  cocos doctor [选项]
-  cocos stop [选项]
-  cocos restart [选项]
-  cocos open [选项]
-  cocos build [平台] [选项]
-
-命令:
-  info     显示项目、要求的版本和实际编辑器元数据
-  ensure   复用或启动目标项目，等待并验证 Funplay MCP（推荐 AI 使用）
-  status   查询目标项目的进程和 MCP 状态，不启动编辑器
-  doctor   检查版本、进程发现和 MCP，并输出诊断建议
-  stop     通过已验证 MCP 请求正常退出，不强杀进程
-  restart  正常退出目标项目后启动并等待 MCP 就绪
-  open     打开编辑器，Windows 默认显示并请求焦点；--wait-ready 同时等待 MCP
-  build    调用 Creator 原生命令行构建
-
-选项:
-  -p, --project <目录>       项目目录，默认从当前目录向上查找
-  -e, --editor <路径>        Creator 可执行文件或安装目录
-  -c, --config <文件>        CLI 配置文件
-      --json                 结构化输出；open --wait 使用编辑器控制台输出
-      --build-config <文件>  build 使用 Creator 构建面板导出的配置 JSON
-      --log-dest <文件>      build 日志路径
-      --wait                 仅 open：等待 Creator 退出，不是等待就绪
-      --wait-ready           仅 open：等同 ensure，不能和 --wait 同用
-      --foreground           Windows open/ensure：显示主窗口并请求焦点
-      --background           Windows open/ensure：隐藏主窗口
-      --mcp-url <URL>        Funplay 面板显示的完整项目 URL（只允许本机）
-      --timeout-ms <毫秒>    操作总超时；ensure/restart 默认 120000，stop 15000
-      --request-timeout-ms <毫秒> 单次 MCP 探测上限，默认 3000
-      --save                 stop/restart 前保存当前已有路径的场景
-      --allow-unverified-editor 无安装版本元数据时允许启动，连接后仍核对版本
-      --debug                build 时启用 debug
-      --release              build 时关闭 debug
-      --start-scene <UUID>   覆盖启动场景
-      --option <key=value>   追加 Creator 构建参数，可重复
-      --guard-url <URL>      该地址可访问时阻止构建
-      --skip-guard           跳过配置文件中的构建前检查
-  -h, --help                 显示帮助
-  -v, --version              显示版本
-
-编辑器查找顺序:
-  1. --editor
-  2. COCOS_CREATOR_PATH
-  3. 配置文件 editor.path
-  4. PATH 中的 CocosCreator
-  5. Windows / macOS 默认安装目录
-`;
-}
-
-function parseCliArguments(argv: string[]) {
-    let parsed: ReturnType<typeof parseArgs<{ options: typeof CLI_OPTIONS; strict: true; allowPositionals: true }>>;
-    try {
-        parsed = parseArgs({
-            args: argv,
-            options: CLI_OPTIONS,
-            allowPositionals: true,
-            strict: true,
-        });
-    } catch (error) {
-        throw new CocosCliError(`参数错误: ${error.message}`, {
-            cause: error,
-            code: "INVALID_ARGUMENT",
-        });
-    }
-
-    const [command, ...args] = parsed.positionals;
-    if (!parsed.values.help && !parsed.values.version) {
-        const [action] = args;
-        let valid = args.length === 0;
-        let invalidMessage = `${command} 不接受位置参数：${args.join(" ")}`;
-        if (command === "build") valid = args.length <= 1;
-        if (command === "asset") valid = action === "refs" && args.length === 2;
-        if (command === "prefab") {
-            valid = (action === "inspect" && args.length === 2) || (action === "diff" && args.length === 3);
-        }
-        if (["build", "asset", "prefab"].includes(command)) invalidMessage = `${command} 的位置参数有误，请查看 cocos --help`;
-        if (!valid) throw new CocosCliError(invalidMessage, { code: "INVALID_ARGUMENT" });
-    }
-    if (parsed.values.type !== undefined && command !== "create") {
-        throw new CocosCliError("--type 仅用于 create", { code: "INVALID_ARGUMENT" });
-    }
-    if ((parsed.values["build-config"] !== undefined || parsed.values["log-dest"] !== undefined) && command !== "build") {
-        throw new CocosCliError("--build-config / --log-dest 仅用于 build", { code: "INVALID_ARGUMENT" });
-    }
-    if (parsed.values.debug && parsed.values.release) {
-        throw new CocosCliError("--debug 与 --release 不能同时使用", {
-            code: "INVALID_ARGUMENT",
-        });
-    }
-    if (parsed.values.wait && parsed.values["wait-ready"]) {
-        throw new CocosCliError("--wait 等待退出，--wait-ready 等待连接就绪，不能同时使用", { code: "INVALID_ARGUMENT" });
-    }
-    const controlsWindow = parsed.values.foreground || parsed.values.background;
-    if (parsed.values.foreground && parsed.values.background) {
-        throw new CocosCliError("--foreground 与 --background 不能同时使用", { code: "INVALID_ARGUMENT" });
-    }
-    if (controlsWindow && (!["open", "ensure"].includes(command) || parsed.values.wait)) {
-        throw new CocosCliError("--foreground / --background 仅用于 open / ensure，不能和 --wait 同用", { code: "INVALID_ARGUMENT" });
-    }
-    for (const key of ["timeout-ms", "request-timeout-ms"] as const) {
-        const value = parsed.values[key];
-        if (value !== undefined && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0 || Number(value) > 3600000)) {
-            throw new CocosCliError(`--${key} 必须是 1 到 3600000 的整数`, { code: "INVALID_ARGUMENT" });
-        }
-    }
-    if ((parsed.values.wait || parsed.values["wait-ready"]) && command !== "open") {
-        throw new CocosCliError("--wait / --wait-ready 仅用于 open；ensure 默认等待 MCP 就绪", { code: "INVALID_ARGUMENT" });
-    }
-    if (parsed.values.save && !["stop", "restart"].includes(command)) {
-        throw new CocosCliError("--save 仅用于 stop / restart", { code: "INVALID_ARGUMENT" });
-    }
-    if (parsed.values.json && command === "open" && parsed.values.wait) {
-        throw new CocosCliError("open --wait 不支持 --json", { code: "INVALID_ARGUMENT" });
-    }
-
-    return {
-        command,
-        args,
-        values: parsed.values,
-    };
 }
 
 function loadProjectContext(options: Required<CliContext>, values: CliValues) {
@@ -254,7 +86,7 @@ function createInfoResult(context, values) {
     const startScene = resolveStartScene({
         projectRoot: context.project.root,
         buildConfig: context.configResult.config.build,
-        explicitStartScene: values["start-scene"],
+        explicitStartScene: values.startScene,
     });
 
     return {
@@ -297,7 +129,7 @@ async function runInfo(options: Required<CliContext>, values: CliValues) {
 }
 
 async function runOpen(options: Required<CliContext>, values: CliValues) {
-    if (values["wait-ready"]) return runLifecycle("ensure", options, values);
+    if (values.wait && values.json) throw new CocosCliError("open --wait 不支持 --json", { code: "INVALID_ARGUMENT" });
     const projectContext = loadProjectContext(options, values);
     const lifecycleOptions = makeLifecycleOptions(options, values, projectContext);
     const waitForExit = values.wait ?? lifecycleOptions.config.open.wait ?? false;
@@ -351,12 +183,12 @@ async function runBuild(options: Required<CliContext>, values: CliValues, platfo
     const buildConfig = {
         ...context.configResult.config.build,
     };
-    if (values["guard-url"]) {
-        buildConfig.guardUrl = values["guard-url"];
+    if (values.guardUrl) {
+        buildConfig.guardUrl = values.guardUrl;
     }
     await assertBuildAllowed({
         buildConfig,
-        skipGuard: values["skip-guard"],
+        skipGuard: values.skipGuard,
     });
     const build = createBuildArguments({
         projectRoot: context.project.root,
@@ -364,10 +196,10 @@ async function runBuild(options: Required<CliContext>, values: CliValues, platfo
         platform,
         debug: values.debug,
         release: values.release,
-        startScene: values["start-scene"],
+        startScene: values.startScene,
         optionAssignments: values.option ?? [],
-        nativeConfigPath: values["build-config"],
-        logDest: values["log-dest"],
+        nativeConfigPath: values.buildConfig,
+        logDest: values.logDest,
     });
 
     if (!values.json) {
@@ -375,12 +207,11 @@ async function runBuild(options: Required<CliContext>, values: CliValues, platfo
         options.output(`编辑器: ${context.creator.path}`);
         options.output(`参数: ${build.buildString}`);
     }
-    const timeoutMs = values["timeout-ms"] === undefined ? undefined : Number(values["timeout-ms"]);
-    if (values["log-dest"] !== undefined && build.logDest) mkdirSync(dirname(build.logDest), { recursive: true });
+    if (values.logDest !== undefined && build.logDest) mkdirSync(dirname(build.logDest), { recursive: true });
     const result = await waitForChild(context.creator.path, build.args, {
         cwd: context.project.root,
         env: options.env,
-        timeoutMs,
+        timeoutMs: values.timeoutMs,
         stdio: ["ignore", "pipe", "pipe"],
         forwardOutput: { stdout: values.json ? process.stderr : process.stdout, stderr: process.stderr },
     });
@@ -410,10 +241,10 @@ function makeLifecycleOptions(options: Required<CliContext>, values: CliValues, 
         env: options.env,
         platform: options.platform,
         editor: values.editor,
-        mcpUrl: values["mcp-url"],
-        timeoutMs: values["timeout-ms"] === undefined ? undefined : Number(values["timeout-ms"]),
-        requestTimeoutMs: values["request-timeout-ms"] === undefined ? undefined : Number(values["request-timeout-ms"]),
-        allowUnverifiedEditor: values["allow-unverified-editor"],
+        mcpUrl: values.mcpUrl,
+        timeoutMs: values.timeoutMs,
+        requestTimeoutMs: values.requestTimeoutMs,
+        allowUnverifiedEditor: values.allowUnverifiedEditor,
         save: values.save,
         windowMode,
         log: options.errorOutput,
@@ -445,19 +276,174 @@ function printLifecycleResult(command, result, output) {
     if (command === "doctor" || !result.ready) for (const step of result.nextSteps ?? []) output(`建议: ${step}`);
 }
 
-async function runLifecycle(command, options: Required<CliContext>, values: CliValues) {
+const MCP_LIFECYCLE = {
+    ensure: ensureProject,
+    status: inspectProject,
+    doctor: inspectProject,
+    stop: stopProject,
+    restart: restartProject,
+};
+
+type LifecycleCommand = keyof typeof MCP_LIFECYCLE;
+
+function parseTimeout(value: string) {
+    const milliseconds = Number(value);
+    if (!/^\d+$/.test(value) || milliseconds < 1 || milliseconds > 3600000) {
+        throw new InvalidArgumentError("必须是 1 到 3600000 的整数");
+    }
+    return milliseconds;
+}
+
+async function runLifecycle(command: LifecycleCommand, options: Required<CliContext>, values: CliValues) {
     const lifecycleOptions = makeLifecycleOptions(options, values);
-    const operation = {
-        ensure: ensureProject,
-        status: inspectProject,
-        doctor: inspectProject,
-        stop: stopProject,
-        restart: restartProject,
-    }[command];
-    const result = { command, ...(await operation(lifecycleOptions)) };
+    const result = { command, ...(await MCP_LIFECYCLE[command](lifecycleOptions)) };
     if (values.json) options.output(JSON.stringify(result, null, 2));
     else printLifecycleResult(command, result, options.output);
     return result.ok ? 0 : 2;
+}
+
+function registerCommands(options: Required<CliContext>, setExitCode: (code: number) => void) {
+    const program = new Command("cocos")
+        .description("在终端管理 Cocos Creator 项目、资源、构建和 Funplay MCP")
+        .version(`${packageManifest.name} ${packageManifest.version}`, "-v, --version", "显示版本")
+        .helpOption("-h, --help", "显示帮助")
+        .configureHelp({ showGlobalOptions: true })
+        .configureOutput({
+            writeOut: (text) => options.output(text.replace(/\r?\n$/, "")),
+            writeErr: () => {},
+        })
+        .exitOverride()
+        .option("-p, --project <目录>", "目标项目目录")
+        .option("-e, --editor <路径>", "Creator 可执行文件或安装目录")
+        .option("-c, --config <文件>", "CLI 配置文件")
+        .option("--json", "以 JSON 输出结果和错误")
+        .option("--mcp-url <URL>", "Funplay 的本机项目 URL")
+        .option("--timeout-ms <毫秒>", "操作总超时", parseTimeout)
+        .option("--request-timeout-ms <毫秒>", "单次 MCP 请求超时", parseTimeout);
+
+    type Handler = (values: CliValues, args: string[]) => number | Promise<number>;
+    function action(command: Command, handler: Handler) {
+        command.action(async () => {
+            const values = command.optsWithGlobals<CliValues>();
+            setExitCode(await handler(values, command.processedArgs));
+        });
+    }
+
+    const create = program.command("create").description("从 Creator 模板创建项目")
+        .addOption(new Option("--type <类型>", "项目模板类型").choices(["2d", "3d"]));
+    action(create, async (values) => {
+        const { project, editor, type } = values;
+        if (!project) throw new CocosCliError("create 需要 --project", { code: "INVALID_ARGUMENT" });
+        const result = await createProject({ ...options, project, editor, type });
+        if (values.json) options.output(JSON.stringify(result, null, 2));
+        else options.output(`已创建 Creator ${result.creatorVersion} 项目：${result.projectRoot}`);
+        return 0;
+    });
+
+    action(program.command("check").description("检查项目资源和 Meta"), (values) => {
+        const project = loadProject({ cwd: options.cwd, project: values.project });
+        const result = checkAssets(project.root);
+        options.output(JSON.stringify(result, null, 2));
+        return result.ok ? 0 : 2;
+    });
+
+    const asset = program.command("asset").description("查询项目资源");
+    action(asset.command("refs <路径或UUID>").description("查找序列化资源引用"), (values, [target]) => {
+        const project = loadProject({ cwd: options.cwd, project: values.project });
+        options.output(JSON.stringify(findAssetReferences(project.root, target), null, 2));
+        return 0;
+    });
+
+    const prefab = program.command("prefab").description("只读检查 Prefab");
+    action(prefab.command("inspect <文件>").description("查看节点和组件"), (values, [file]) => {
+        const project = loadProject({ cwd: options.cwd, project: values.project });
+        options.output(JSON.stringify(inspectPrefab(project.root, file), null, 2));
+        return 0;
+    });
+    action(prefab.command("diff <旧文件> <新文件>").description("比较节点和组件字段"), (values, [left, right]) => {
+        const project = loadProject({ cwd: options.cwd, project: values.project });
+        options.output(JSON.stringify(diffPrefabs(project.root, left, right), null, 2));
+        return 0;
+    });
+
+    const info = program.command("info").description("查看项目和 Creator 版本")
+        .option("--start-scene <UUID>", "覆盖启动场景");
+    action(info, (values) => runInfo(options, values));
+
+    const open = program.command("open").description("打开或显示 Creator 主窗口")
+        .addOption(new Option("--wait", "等待 Creator 退出").conflicts(["foreground", "background"]));
+    addWindowOptions(open);
+    action(open, (values) => runOpen(options, values));
+
+    const build = program.command("build [平台]").description("调用 Creator 原生命令行构建")
+        .option("--build-config <文件>", "Creator 构建面板导出的 JSON")
+        .option("--log-dest <文件>", "Creator 构建日志路径")
+        .addOption(new Option("--debug", "启用调试构建").conflicts("release"))
+        .option("--release", "关闭调试构建")
+        .option("--start-scene <UUID>", "覆盖启动场景")
+        .option("--option <key=value>", "追加 Creator 构建参数，可重复", (value, previous: string[]) => [...previous, value], [])
+        .option("--guard-url <URL>", "此地址可访问时阻止构建")
+        .option("--skip-guard", "跳过构建前 HTTP 检查");
+    action(build, (values, [platform]) => runBuild(options, values, platform));
+
+    const mcp = program.command("mcp").description("连接目标 Creator 项目的 Funplay MCP");
+    mcp.action(() => mcp.outputHelp());
+    for (const operation of ["setup", "update"] as const) {
+        const description = operation === "setup" ? "安装最新稳定版 Funplay" : "从 GitHub 更新已安装的 Funplay";
+        const command = mcp.command(operation).description(description)
+            .option("--global", "安装到项目所用 Creator 版本的全局扩展目录");
+        action(command, async (values) => {
+            const project = loadProject({ cwd: options.cwd, project: values.project });
+            const result = await manageFunplayExtension({ project, operation, global: values.global, timeoutMs: values.timeoutMs });
+            if (values.json) {
+                options.output(JSON.stringify({ command: "mcp " + operation, ...result }, null, 2));
+            } else {
+                const state = result.changed ? "已安装" : "已存在";
+                options.output(`Funplay ${result.version} ${state}：${result.extensionPath}`);
+                if (result.projectOverridePath) options.output(`当前项目优先加载项目副本：${result.projectOverridePath}`);
+                if (result.backupPath) options.output(`原扩展备份：${result.backupPath}`);
+                if (result.changed) options.output("在 Creator 中打开或重开目标项目以加载扩展。");
+            }
+            return 0;
+        });
+    }
+    const ensure = mcp.command("ensure").description("启动或复用 Creator，并等待 MCP 就绪")
+        .option("--allow-unverified-editor", "允许尝试启动未核验版本的安装");
+    addWindowOptions(ensure);
+    action(ensure, (values) => runLifecycle("ensure", options, values));
+    action(mcp.command("status").description("查看目标项目进程和 MCP 状态"), (values) => runLifecycle("status", options, values));
+    action(mcp.command("doctor").description("诊断 Creator 版本、进程和 MCP"), (values) => runLifecycle("doctor", options, values));
+    const stop = mcp.command("stop").description("通过 Funplay 请求 Creator 正常退出")
+        .option("--save", "退出前保存当前场景");
+    action(stop, (values) => runLifecycle("stop", options, values));
+    const restart = mcp.command("restart").description("正常退出并重新启动 Creator")
+        .option("--save", "退出前保存当前场景")
+        .option("--allow-unverified-editor", "允许尝试启动未核验版本的安装");
+    action(restart, (values) => runLifecycle("restart", options, values));
+
+    const register = mcp.command("register").description("注册 Agent MCP 并补齐 Funplay Skills")
+        .addOption(new Option("--client <客户端>", "选择客户端").choices(FUNPLAY_CLIENTS).makeOptionMandatory())
+        .addOption(new Option("--scope <作用域>", "客户端配置作用域").choices(["project", "user"]).default("project"));
+    action(register, async (values) => {
+        const { connection } = await connectProjectMcp(makeLifecycleOptions(options, values));
+        const result = await registerFunplay({ connection, clientId: values.client, scope: values.scope });
+        if (values.json) {
+            options.output(JSON.stringify({ command: "mcp register", ...result }, null, 2));
+        } else {
+            options.output(`MCP 已注册：${result.configPath}`);
+            options.output(`Funplay Skills：安装 ${result.skills.installed.length}，保留 ${result.skills.preserved.length}。`);
+            for (const failure of result.skills.failed) options.errorOutput(`Skill ${failure.skillName} 安装失败：${failure.message}`);
+            if (result.launchCommand) options.output(result.launchCommand);
+            else options.output("在目标项目中重新加载客户端以启用 Funplay 工具。");
+        }
+        return result.ok ? 0 : 1;
+    });
+    return program;
+}
+
+function addWindowOptions(command: Command) {
+    command.addOption(new Option("--foreground", "Windows：显示主窗口并请求焦点").conflicts("background"))
+        .option("--background", "Windows：隐藏主窗口");
 }
 
 export async function runCli(argv: string[], context: CliContext = {}) {
@@ -469,61 +455,20 @@ export async function runCli(argv: string[], context: CliContext = {}) {
         errorOutput: context.errorOutput ?? console.error,
     };
 
+    let exitCode = 0;
+    const program = registerCommands(options, (code) => { exitCode = code; });
     try {
-        const parsed = parseCliArguments(argv);
-        if (parsed.values.version) {
-            options.output(`${packageManifest.name} ${packageManifest.version}`);
-            return 0;
+        if (argv.length === 0) program.outputHelp();
+        else await program.parseAsync(argv, { from: "user" });
+        return exitCode;
+    } catch (caught) {
+        let error = caught;
+        if (caught instanceof CommanderError) {
+            if (caught.exitCode === 0) return 0;
+            const code = caught.code === "commander.unknownCommand" ? "INVALID_COMMAND" : "INVALID_ARGUMENT";
+            const message = caught.code === "commander.help" ? "缺少子命令，请使用 --help 查看用法" : caught.message.replace(/^error: /, "");
+            error = new CocosCliError(message, { code });
         }
-        if (parsed.values.help || !parsed.command) {
-            options.output(formatHelp());
-            return 0;
-        }
-
-        if (parsed.command === "create") {
-            const { project, editor, type } = parsed.values;
-            if (!project) throw new CocosCliError("create 需要 --project", { code: "INVALID_ARGUMENT" });
-            const result = await createProject({ ...options, project, editor, type });
-            if (parsed.values.json) options.output(JSON.stringify(result, null, 2));
-            else options.output(`已创建 Creator ${result.creatorVersion} 项目：${result.projectRoot}`);
-            return 0;
-        }
-        if (["check", "asset", "prefab"].includes(parsed.command)) {
-            const project = loadProject({ cwd: options.cwd, project: parsed.values.project });
-            const [action, file, comparison] = parsed.args;
-            if (parsed.command === "check") {
-                const result = checkAssets(project.root);
-                options.output(JSON.stringify(result, null, 2));
-                return result.ok ? 0 : 2;
-            }
-            if (parsed.command === "asset") {
-                options.output(JSON.stringify(findAssetReferences(project.root, file), null, 2));
-                return 0;
-            }
-            const result = action === "inspect"
-                ? inspectPrefab(project.root, file)
-                : diffPrefabs(project.root, file, comparison);
-            options.output(JSON.stringify(result, null, 2));
-            return 0;
-        }
-        if (parsed.command === "info") {
-            return await runInfo(options, parsed.values);
-        }
-        if (["ensure", "status", "doctor", "stop", "restart"].includes(parsed.command)) {
-            return await runLifecycle(parsed.command, options, parsed.values);
-        }
-        if (parsed.command === "open") {
-            return await runOpen(options, parsed.values);
-        }
-        if (parsed.command === "build") {
-            return await runBuild(options, parsed.values, parsed.args[0]);
-        }
-
-        throw new CocosCliError(`未知命令: ${parsed.command}`, {
-            code: "INVALID_COMMAND",
-            details: ["可用命令: create, check, asset, prefab, info, ensure, status, doctor, stop, restart, open, build"],
-        });
-    } catch (error) {
         if (argv.includes("--json")) {
             options.output(JSON.stringify({
                 ok: false,

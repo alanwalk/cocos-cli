@@ -211,6 +211,27 @@ function assertNoFatalConnectionError(options: LifecycleOptions, inspected) {
     if (fatal) throw error(fatal.error.code, fatal.error.message, [fatal.endpoint ?? ""]);
 }
 
+/** Locate an existing Funplay instance without starting Creator or writing state. */
+export async function connectProjectMcp(options: LifecycleOptions) {
+    const dep = dependencies(options);
+    const { requestTimeoutMs } = settings(options);
+    const deadline = dep.now() + (options.timeoutMs ?? 10000);
+    const state = await dep.readProjectState(options.project.root);
+    const inspected = await inspectConnections(options, dep, state, deadline);
+    assertNoFatalConnectionError(options, inspected);
+    if (!inspected.connection) {
+        const failure = relevantConnectionError(inspected.attempts)?.error;
+        throw error(failure?.code ?? "MCP_NOT_FOUND", failure?.message ?? "没有找到目标项目的 Funplay MCP 服务", [
+            ...(failure?.details ?? []),
+            "使用 cocos mcp ensure 启动或确认目标项目的 MCP 连接。",
+        ]);
+    }
+
+    const timeoutMs = Math.min(requestTimeoutMs, deadline - dep.now());
+    if (timeoutMs <= 0) throw error("MCP_TIMEOUT", "连接已验证，但 MCP 操作的时间预算已用尽。");
+    return { connection: inspected.connection, timeoutMs };
+}
+
 async function finishEnsure(options: LifecycleOptions, dep, inspected, creator, launchedPid, deadline) {
     const pid = launchedPid && dep.isProcessAlive(launchedPid) ? launchedPid : inspected.matchingProcesses[0]?.pid ?? null;
     await dep.writeProjectState(options.project.root, {

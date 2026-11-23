@@ -30,7 +30,7 @@
 
 ### 兼容和文档
 
-- 保留 `info/open/build`；`open --wait-ready` 等同 `ensure`，原 `open --wait` 仍表示等待退出。
+- 提供 `info/open/build`，其中 `open --wait` 表示等待退出。
 - 保留原生 Creator 命令行构建入口。
 - 新增机器可读输出、明确的错误码和就绪退出码。
 - 明确 MCP 就绪不等于资源导入、脚本编译或构建完成。

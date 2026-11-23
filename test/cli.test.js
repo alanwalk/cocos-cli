@@ -27,16 +27,18 @@ test("--help 列出核心命令", () => {
     const result = runCli(["--help"]);
 
     assert.equal(result.status, 0);
-    assert.match(result.stdout, /cocos info/);
-    assert.match(result.stdout, /cocos open/);
-    assert.match(result.stdout, /cocos build/);
+    assert.match(result.stdout, /^  info\b/m);
+    assert.match(result.stdout, /^  open\b/m);
+    assert.match(result.stdout, /^  build\b/m);
+    assert.match(result.stdout, /^  mcp\b/m);
+    assert.doesNotMatch(result.stdout, /^  ensure\b/m);
 });
 
 test("info 拒绝多余的位置参数", () => {
     const result = runCli(["info", "unexpected"]);
 
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /info 不接受位置参数/);
+    assert.match(result.stderr, /too many arguments for .*info/);
 });
 
 test("info --json 返回项目和编辑器信息", (t) => {
@@ -65,4 +67,39 @@ test("info --json 返回项目和编辑器信息", (t) => {
     assert.equal(parsed.creatorVersion, "3.8.8");
     assert.equal(parsed.editorPath, editorPath);
     assert.equal(parsed.startScene, "scene-uuid");
+});
+
+test("Commander generates nested help and rejects the removed MCP entry points", () => {
+    const help = runCli(["mcp", "register", "--help"]);
+    assert.equal(help.status, 0, help.stderr);
+    assert.match(help.stdout, /Usage: cocos mcp register/);
+    assert.match(help.stdout, /--client/);
+    assert.match(help.stdout, /--project/);
+    for (const oldCommand of ["ensure", "status", "doctor", "stop", "restart"]) {
+        const result = runCli([oldCommand, "--json"]);
+        assert.equal(result.status, 1);
+        assert.equal(result.stderr, "");
+        assert.equal(JSON.parse(result.stdout).error.code, "INVALID_COMMAND");
+    }
+    for (const subcommand of ["tools", "call", "resources", "prompts"]) {
+        assert.equal(runCli(["mcp", subcommand]).status, 1);
+    }
+    const open = runCli(["open", "--wait-ready", "--json"]);
+    assert.equal(open.status, 1);
+    assert.equal(JSON.parse(open.stdout).error.code, "INVALID_ARGUMENT");
+});
+
+test("Commander keeps JSON errors for invalid options and conflicts", () => {
+    for (const args of [
+        ["--timeout-ms", "0", "mcp", "tools", "--json"],
+        ["open", "--foreground", "--background", "--json"],
+        ["build", "--debug", "--release", "--json"],
+        ["mcp", "register", "--json"],
+        ["mcp", "register", "--client", "invalid", "--json"],
+    ]) {
+        const result = runCli(args);
+        assert.equal(result.status, 1);
+        assert.equal(result.stderr, "");
+        assert.equal(JSON.parse(result.stdout).error.code, "INVALID_ARGUMENT");
+    }
 });

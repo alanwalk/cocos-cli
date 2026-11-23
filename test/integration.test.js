@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -75,9 +75,9 @@ async function startFunplay(t, root, options = {}) {
                 response.end();
                 return;
             }
-            assert.equal(rpc.method, "tools/call");
             assert.ok(initializedSessions.has(session));
             assert.equal(rpc.params._meta.expected_context, context.expected_context);
+            assert.equal(rpc.method, "tools/call");
             assert.equal(rpc.params.arguments.expected_context, context.expected_context);
             const name = rpc.params.name;
             assert.ok(["get_project_info", "get_editor_state"].includes(name), `Readiness commands must not call mutating tools: ${name}`);
@@ -98,7 +98,7 @@ async function startFunplay(t, root, options = {}) {
                 projectPath: root,
                 cocosVersion: info.cocosVersion,
                 toolProfile: "core",
-                status: { ...info, running: true, url: endpoint },
+                status: { ...info, running: true, url: endpoint, packagePath: options.packagePath },
                 selection: {},
                 scene: { sceneName: "Main", uuid: "integration-scene", childCount: 0 },
                 windows: [],
@@ -128,10 +128,10 @@ async function startFunplay(t, root, options = {}) {
 }
 
 /** Async execFile keeps the fixture's HTTP event loop running while the CLI waits. */
-async function runCli(project, command, extraArgs = []) {
+async function runCli(project, commands, extraArgs = []) {
     const env = { ...process.env };
     for (const key of ["COCOS_MCP_HOST", "COCOS_MCP_PORT", "COCOS_CLI_MCP_URL", "COCOS_CREATOR_PATH", "COCOS_CLI_DEBUG"]) delete env[key];
-    const args = [cliPath, command, "--json", "--project", project.root, "--editor", project.missingEditor,
+    const args = [cliPath, ...commands, "--json", "--project", project.root, "--editor", project.missingEditor,
         "--timeout-ms", "5000", "--request-timeout-ms", "1500", ...extraArgs];
     const result = await new Promise((resolve, reject) => {
         execFile(process.execPath, args, { cwd: project.root, env, encoding: "utf8", timeout: 12000, maxBuffer: 1024 * 1024, windowsHide: true },
@@ -154,7 +154,7 @@ async function runCli(project, command, extraArgs = []) {
 test("integration: status --json verifies a running project without an installed editor", async (t) => {
     const project = projectFixture(t);
     const server = await startFunplay(t, project.root);
-    const { code, data } = await runCli(project, "status", ["--mcp-url", server.endpoint]);
+    const { code, data } = await runCli(project, ["mcp", "status"], ["--mcp-url", server.endpoint]);
     assert.equal(code, 0);
     assert.equal(data.command, "status");
     assert.equal(data.ok, true);
@@ -174,7 +174,7 @@ test("integration: status --json verifies a running project without an installed
 test("integration: repeated ensure --json reuses MCP and writes a verified endpoint receipt", async (t) => {
     const project = projectFixture(t);
     const server = await startFunplay(t, project.root);
-    const first = await runCli(project, "ensure", ["--mcp-url", server.endpoint]);
+    const first = await runCli(project, ["mcp", "ensure"], ["--mcp-url", server.endpoint]);
     assert.equal(first.code, 0);
     assert.equal(first.data.reused, true);
     assert.equal(first.data.launched, false);
@@ -184,7 +184,7 @@ test("integration: repeated ensure --json reuses MCP and writes a verified endpo
     assert.equal(state.editorPath, null);
     assert.equal(state.startedAt, null);
     // The second process discovers the saved endpoint without --mcp-url.
-    const second = await runCli(project, "ensure");
+    const second = await runCli(project, ["mcp", "ensure"]);
     assert.equal(second.code, 0);
     assert.equal(second.data.reused, true);
     assert.equal(second.data.launched, false);
@@ -198,7 +198,7 @@ test("integration: doctor --json reads the configured endpoint and reports the l
     const project = projectFixture(t);
     const server = await startFunplay(t, project.root);
     writeFileSync(join(project.root, "cocos-cli.config.json"), `${JSON.stringify({ mcp: { url: server.endpoint } })}\n`);
-    const { code, data } = await runCli(project, "doctor");
+    const { code, data } = await runCli(project, ["mcp", "doctor"]);
     assert.equal(code, 0);
     assert.equal(data.command, "doctor");
     assert.equal(data.ready, true);
@@ -212,7 +212,7 @@ test("integration: ensure --json rejects an explicit endpoint serving another pr
     const target = projectFixture(t);
     const other = projectFixture(t);
     const server = await startFunplay(t, other.root);
-    const { code, data } = await runCli(target, "ensure", ["--mcp-url", server.endpoint]);
+    const { code, data } = await runCli(target, ["mcp", "ensure"], ["--mcp-url", server.endpoint]);
     assert.equal(code, 1);
     assert.equal(data.ok, false);
     assert.equal(data.error.code, "MCP_PROJECT_MISMATCH");
@@ -229,7 +229,7 @@ test("integration: offline status --json returns exit 2 and a machine-readable d
     const port = reservation.address().port;
     await new Promise((resolve) => reservation.close(resolve));
     const endpoint = `http://127.0.0.1:${port}/mcp/project/${projectContext(project.root).project_id}/`;
-    const { code, data } = await runCli(project, "status", ["--mcp-url", endpoint]);
+    const { code, data } = await runCli(project, ["mcp", "status"], ["--mcp-url", endpoint]);
     assert.equal(code, 2);
     assert.equal(data.command, "status");
     assert.equal(data.ok, false);
@@ -243,11 +243,98 @@ test("integration: offline status --json returns exit 2 and a machine-readable d
 test("integration: doctor --json rejects the wrong running Creator version", async (t) => {
     const project = projectFixture(t);
     const server = await startFunplay(t, project.root, { editorVersion: "3.8.7" });
-    const { code, data } = await runCli(project, "doctor", ["--mcp-url", server.endpoint]);
+    const { code, data } = await runCli(project, ["mcp", "doctor"], ["--mcp-url", server.endpoint]);
     assert.equal(code, 2);
     assert.equal(data.ready, false);
     assert.equal(data.editor.requiredVersion, "3.8.8");
     assert.equal(data.mcp.editorVersion, "3.8.7");
     assert.equal(data.mcp.error.code, "MCP_VERSION_MISMATCH");
     assert.equal(server.requests.some((request) => request.params?.name === "get_editor_state"), false);
+});
+
+test("integration: register rejects an endpoint that belongs to a different project", async (t) => {
+    const target = projectFixture(t);
+    const wrong = projectFixture(t);
+    const server = await startFunplay(t, wrong.root);
+    const result = await runCli(target, ["mcp", "register", "--client", "codex"], ["--mcp-url", server.endpoint]);
+    assert.equal(result.code, 1);
+    assert.equal(result.data.error.code, "MCP_PROJECT_MISMATCH");
+    assert.deepEqual(server.requests.map((request) => request.method), ["initialize"]);
+    assert.equal(existsSync(join(target.root, ".codex")), false);
+    assert.equal(existsSync(join(target.root, ".agents")), false);
+});
+
+test("integration: register writes the project config and installs only missing Skills", async (t) => {
+    const project = projectFixture(t);
+    const packagePath = join(project.root, "extensions", "funplay-cocos-mcp");
+    const lib = join(packagePath, "lib");
+    mkdirSync(lib, { recursive: true });
+    writeFileSync(join(packagePath, "package.json"), JSON.stringify({ name: "funplay-cocos-mcp", version: "0.7.6" }));
+    writeFileSync(join(lib, "atomic-file.js"), [
+        'const fs = require("node:fs");',
+        'const path = require("node:path");',
+        'const readOptionalText = (file) => fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;',
+        'function writeTextIfUnchanged(file, text, old) {',
+        '  if (readOptionalText(file) !== old) throw Error("changed");',
+        '  fs.mkdirSync(path.dirname(file), { recursive: true });',
+        '  fs.writeFileSync(file, text);',
+        '}',
+        'module.exports = { readOptionalText, writeTextIfUnchanged };',
+    ].join("\n"));
+    writeFileSync(join(lib, "client-config.js"), [
+        'const { join } = require("node:path");',
+        'const { getProjectIdentity } = require("./identity.js");',
+        'const { readOptionalText, writeTextIfUnchanged } = require("./atomic-file.js");',
+        'function buildTargets(config, options) {',
+        '  const projectIdentity = getProjectIdentity(config.projectPath);',
+        '  const url = "http://" + config.host + ":" + config.port + "/mcp/project/" + projectIdentity + "/";',
+        '  return [{ id: "codex", configPath: join(options.homePath, ".codex", "config.toml"), url, projectIdentity }];',
+        '}',
+        'function configureTarget(config, id, options) {',
+        '  const target = buildTargets(config, options)[0];',
+        '  const prior = readOptionalText(target.configPath);',
+        '  if (!prior?.includes(target.url)) writeTextIfUnchanged(target.configPath, (prior || "") + "[mcp_servers.funplay]\\nurl = " + JSON.stringify(target.url) + "\\n", prior);',
+        '  return { ...target, serverName: "funplay" };',
+        '}',
+        'module.exports = { buildTargets, configureTarget };',
+    ].join("\n"));
+    writeFileSync(join(lib, "identity.js"), "exports.getProjectIdentity = () => " + JSON.stringify(projectContext(project.root).project_id));
+    writeFileSync(join(lib, "project-skills.js"), [
+        'const fs = require("node:fs");',
+        'const path = require("node:path");',
+        'const names = ["funplay-cocos-mcp-workflow", "funplay-cocos-ui-composition"];',
+        'const file = (root, name) => path.join(root, ".agents", "skills", name, "SKILL.md");',
+        'exports.getProjectSkillsState = (root) => ({ supported: true, builtIns: names.map(skillName => ({ skillName, status: fs.existsSync(file(root, skillName)) ? "modified" : "missing" })) });',
+        'exports.updateBuiltInProjectSkill = (root, { skillName }) => {',
+        '  if (skillName === names[1] && fs.existsSync(path.join(root, "fail-skill"))) throw Error("fixture Skill failure");',
+        '  const destination = file(root, skillName);',
+        '  fs.mkdirSync(path.dirname(destination), { recursive: true });',
+        '  fs.writeFileSync(destination, "fixture", { flag: "wx" });',
+        '  return { installed: true };',
+        '};',
+    ].join("\n"));
+    const server = await startFunplay(t, project.root, { packagePath });
+    const args = ["mcp", "register", "--client", "codex"];
+    const extra = ["--mcp-url", server.endpoint];
+    const target = join(project.root, ".codex", "config.toml");
+    mkdirSync(join(project.root, ".codex"));
+    writeFileSync(target, 'model = "kept"\n');
+    const failureMarker = join(project.root, "fail-skill");
+    writeFileSync(failureMarker, "fixture");
+    const first = await runCli(project, args, extra);
+    assert.equal(first.code, 1, first.stdout);
+    assert.equal(first.data.configured, true);
+    assert.equal(first.data.configPath, target);
+    assert.equal(first.data.skills.installed.length, 1);
+    assert.equal(first.data.skills.failed[0].skillName, "funplay-cocos-ui-composition");
+    unlinkSync(failureMarker);
+    assert.ok(readFileSync(target, "utf8").startsWith('model = "kept"\n'));
+    assert.ok(readFileSync(target, "utf8").includes(server.endpoint));
+    const workflow = join(project.root, ".agents", "skills", "funplay-cocos-mcp-workflow", "SKILL.md");
+    writeFileSync(workflow, "user edits");
+    const again = await runCli(project, args, extra);
+    assert.equal(again.code, 0, again.stdout);
+    assert.equal(again.data.skills.preserved.length, 1);
+    assert.deepEqual(again.data.skills.installed, ["funplay-cocos-ui-composition"]);
+    assert.equal(readFileSync(workflow, "utf8"), "user edits");
 });

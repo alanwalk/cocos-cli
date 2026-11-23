@@ -4,7 +4,7 @@
 
 - Creator 关闭时，用 `create`、`check`、`asset refs` 和 `prefab inspect / diff` 处理项目文件。四类命令都可脱离 Funplay 运行。
 - 构建用 `cocos build`。命令启动 Creator 的原生构建进程，需要可用的 GUI 环境。
-- 进入编辑器工作流时，运行 `cocos ensure --json`。确认 `ready: true` 后，通过当前项目的 Funplay MCP 操作场景、资源和预览。
+- 进入编辑器工作流时，运行 `cocos mcp ensure --json`。确认 `ready: true` 后，通过当前项目的 Funplay MCP 操作场景、资源和预览。
 
 ## 安装
 
@@ -47,11 +47,12 @@ cocos check --project $project
 cocos open --project $project
 ```
 
-安装并启用项目的 Funplay 扩展后，用 `ensure` 验证实际连接：
+用 `setup` 安装 Funplay 扩展，再用 `ensure` 验证实际连接：
 
 ```powershell
-cocos ensure --project $project --json
-cocos status --project $project --json
+cocos mcp setup --project $project
+cocos mcp ensure --project $project --json
+cocos mcp status --project $project --json
 ```
 
 ## 离线项目与资源
@@ -102,34 +103,52 @@ cocos build web-mobile --project $project --start-scene "你的场景UUID" --opt
 | --- | --- |
 | `open` | Windows 按项目定位或启动 Creator，默认显示或恢复主窗口并请求焦点。普通 `open` 无需 MCP。 |
 | `info` | 读取项目声明、Creator 安装路径和版本元数据。 |
-| `ensure` | 复用目标项目，或启动 Creator 一次，然后验证 Funplay 是否就绪。 |
-| `status` / `doctor` | 只读检查进程、版本和 MCP，`doctor` 额外输出诊断建议。 |
-| `stop` / `restart` | 通过已验证的 Funplay 请求当前实例正常退出。`restart` 先预检替代安装，确认旧实例退出后才启动新实例。 |
+| `mcp ensure` | 复用目标项目，或启动 Creator 一次，然后验证 Funplay 是否就绪。 |
+| `mcp status` / `mcp doctor` | 只读检查进程、版本和 MCP，`doctor` 额外输出诊断建议。 |
+| `mcp stop` / `mcp restart` | 通过已验证的 Funplay 请求当前实例正常退出。`restart` 先预检替代安装，确认旧实例退出后才启动新实例。 |
 
 ```powershell
 cocos open --project $project
 cocos open --project $project --background --json
-cocos open --project $project --wait-ready --json
-cocos stop --project $project --json
-cocos restart --project $project --save --json
+cocos mcp stop --project $project --json
+cocos mcp restart --project $project --save --json
 ```
 
 - `--foreground` 和 `--background` 是 Windows 窗口选项，用于 `open` 和 `ensure`。两者互斥。实际焦点由操作系统决定，JSON 中 `window.visible` 和 `window.focused` 分别记录可见与焦点状态。
-- `open --wait` 等待 Creator **退出**，沿用子进程退出码和控制台输出。`open --wait-ready` 等同 `ensure`，等待 **MCP 就绪**。`--wait` 与 `--wait-ready`、显隐参数和 `--json` 互斥。
+- `open --wait` 等待 Creator **退出**，沿用子进程退出码和控制台输出，与显隐参数和 `--json` 互斥。需要等待 **MCP 就绪** 时，使用 `cocos mcp ensure`。
 - `ready: true` 表示已完成 Funplay 握手，并核验项目路径、项目 ID、实例上下文、实际 Creator 版本和编辑器服务状态。资源导入、脚本编译和构建分别验证。`mcp.readiness.sceneAvailable` 单独记录场景查询是否可用。
 - 已发现目标进程时，`ensure` 等待该实例。进程查询无法排除重复实例时会报错。就绪超时后会保留仍运行的 Creator，便于查看启动日志。
 - `stop` 和 `restart` 遇到未保存场景时会拒绝退出。`--save` 请求保存当前场景，确认保存后再请求退出。首次保存可能出现路径选择窗口，其他扩展或对话框也可能阻止退出。
 
-### Codex 项目级配置
+### 安装、更新和 Agent 注册
 
-在可信项目的 `.codex/config.toml` 中添加 Funplay 的 Streamable HTTP 入口。可从 Funplay 面板或 `cocos ensure --json` 的 `mcp.endpoint` 获取完整 URL。在项目目录写入下面的配置，并替换为自己的完整 URL。
-
-```toml
-[mcp_servers.funplay]
-url = "http://127.0.0.1:<实际端口>/mcp/project/<实际项目ID>/"
+```powershell
+cocos mcp setup --project $project
+cocos mcp setup --project $project --global
+cocos mcp update --project $project
+cocos mcp ensure --project $project --json
+cocos mcp register --project $project --client codex
 ```
 
-在 Codex 打开并信任该项目，启动新聊天以加载项目配置。客户端使用该端点完成自己的 MCP 握手。
+- `setup` 从 GitHub 下载最新稳定版并校验 SHA256，默认安装到项目的 `extensions/funplay-cocos-mcp`。已有安装时返回当前版本。
+- `--global` 用于 `setup` 和 `update`，目标是 `~/.CocosCreator/builtin-extensions/<creator.version>/funplay-cocos-mcp`。版本取自目标项目。若项目和全局扩展同时存在，Creator 优先加载项目副本。
+- `update` 更新所选范围内已安装的 Release，保持原版本或升级到新版本。替换前保存一份备份，返回 `backupPath`。Git 工作副本使用 Git 更新。安装或更新后，在 Creator 中打开或重开项目。
+- `register` 验证当前项目在线的 Funplay 端点，并为指定 Agent 注册 MCP，补齐缺失的 Workflow 和 UI Composition Skills。重复运行时保留现有 Skill、旧目录安装和用户修改。请重新加载客户端，再由 Agent 直接调用 Funplay 工具。
+
+| `--client` | 项目级 MCP 配置 |
+| --- | --- |
+| `codex` | `.codex/config.toml` |
+| `claude-code`、`codebuddy` | `.mcp.json` |
+| `cursor` | `.cursor/mcp.json` |
+| `vscode` | `.vscode/mcp.json` |
+| `kiro` | `.kiro/settings/mcp.json` |
+| `qoder` | `.qoder/settings.json` |
+| `kimi-code` | `.kimi-code/mcp.json` |
+| `opencode` | `opencode.jsonc`，或已存在的 `opencode.json` |
+| `trae` | `.trae/mcp.json` |
+| `dsh` | `.dsh/funplay-cocos-mcp.patch.json`，按返回的 `--patch` 命令启动 |
+
+`register --scope user` 可显式使用 Funplay 对应的用户级入口，支持 Codex、Cursor、VS Code、Kiro、Qoder、Kimi Code 和 OpenCode。Skill 目录仍按 Funplay 的项目规则选择。注册结果分别报告 MCP 配置和 Skill 安装情况，Skill 安装部分失败时返回退出码 1。
 
 ## CLI 配置与诊断
 
