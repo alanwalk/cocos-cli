@@ -316,7 +316,7 @@ test("integration: register writes the project config and installs only missing 
         'const path = require("node:path");',
         'const names = ["funplay-cocos-mcp-workflow", "funplay-cocos-ui-composition"];',
         'const file = (root, name) => path.join(root, ".agents", "skills", name, "SKILL.md");',
-        'exports.getProjectSkillsState = (root) => ({ supported: true, builtIns: names.map(skillName => ({ skillName, status: fs.existsSync(file(root, skillName)) ? "modified" : "missing" })) });',
+        'exports.getProjectSkillsState = (root) => ({ supported: true, builtIns: names.map(skillName => ({ skillName, absolutePath: file(root, skillName), status: fs.existsSync(file(root, skillName)) ? "modified" : "missing" })) });',
         'exports.updateBuiltInProjectSkill = (root, { skillName }) => {',
         '  if (skillName === names[1] && fs.existsSync(path.join(root, "fail-skill"))) throw Error("fixture Skill failure");',
         '  const destination = file(root, skillName);',
@@ -332,11 +332,18 @@ test("integration: register writes the project config and installs only missing 
     const target = join(project.root, ".codex", "config.toml");
     mkdirSync(join(project.root, ".codex"));
     writeFileSync(target, 'model = "kept"\n');
+    const plain = await runCli(project, args, extra);
+    assert.equal(plain.code, 0, plain.stdout);
+    assert.equal(plain.data.skills.requested, false);
+    assert.equal(existsSync(join(project.root, ".agents")), false);
+    assert.ok(existsSync(target));
+    args.push("--skills");
     const failureMarker = join(project.root, "fail-skill");
     writeFileSync(failureMarker, "fixture");
     const first = await runCli(project, args, extra);
     assert.equal(first.code, 1, first.stdout);
     assert.equal(first.data.configured, true);
+    assert.equal(first.data.skills.requested, true);
     assert.equal(first.data.configPath, target);
     const funplayConfig = join(project.root, "funplay-cocos-mcp.config.json");
     assert.equal(first.data.projectConfigPath, funplayConfig);
@@ -363,6 +370,7 @@ test("integration: register writes the project config and installs only missing 
     assert.equal(again.data.skills.preserved.length, 1);
     assert.deepEqual(again.data.skills.installed, ["funplay-cocos-ui-composition"]);
     assert.equal(readFileSync(workflow, "utf8"), "user edits");
+    assert.equal(again.data.skills.paths["funplay-cocos-mcp-workflow"], workflow);
     const merged = JSON.parse(readFileSync(funplayConfig, "utf8"));
     assert.deepEqual(merged, {
         port: 8765, autostart: false, toolProfile: "custom",

@@ -34,10 +34,10 @@ interface ClientConfig {
 interface WriterOptions { homePath?: string; env?: NodeJS.ProcessEnv }
 interface SkillApi {
     getProjectSkillsState: (root: string, options: { clientId: string }) => {
-        supported: boolean; error?: string; builtIns: { skillName: string; status: string }[];
+        supported: boolean; error?: string; builtIns: { skillName: string; status: string; absolutePath?: string }[];
     };
     updateBuiltInProjectSkill: (root: string, options: { clientId: string; skillName: string; onlyIfMissing: true; extensionVersion: string }) => {
-        installed: boolean;
+        installed: boolean; state?: { absolutePath?: string };
     };
 }
 
@@ -76,7 +76,7 @@ function assertContained(root: string, target: string) {
     }
 }
 
-async function loadActiveFunplay(connection: Connection, home: string, timeoutMs?: number) {
+async function loadActiveFunplay(connection: Connection, home: string, installSkills: boolean, timeoutMs?: number) {
     const state = connection.editorState as { version?: string; status?: { packagePath?: unknown } } | undefined;
     const version = connection.editorVersion;
     if (!/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version ?? "")) {
@@ -121,7 +121,7 @@ async function loadActiveFunplay(connection: Connection, home: string, timeoutMs
     return {
         version: String(manifest.version),
         config: require("./lib/client-config.js") as ClientConfig,
-        skills: require("./lib/project-skills.js") as SkillApi,
+        skills: installSkills ? require("./lib/project-skills.js") as SkillApi : undefined,
         readText: require("./lib/atomic-file.js").readOptionalText as (path: string) => string | null,
         writeText: require("./lib/atomic-file.js").writeTextIfUnchanged as (path: string, text: string, previous: string | null) => void,
     };
@@ -155,8 +155,8 @@ function readProjectRegistrationConfig(text: string | null, path: string, connec
     }
 }
 
-export async function registerFunplay({ connection, clientId, scope, timeoutMs, homeDirectory = homedir() }: {
-    connection: Connection; clientId: FunplayClient; scope: Scope; timeoutMs?: number; homeDirectory?: string;
+export async function registerFunplay({ connection, clientId, scope, installSkills = false, timeoutMs, homeDirectory = homedir() }: {
+    connection: Connection; clientId: FunplayClient; scope: Scope; installSkills?: boolean; timeoutMs?: number; homeDirectory?: string;
 }) {
     if (!connection.ready || !connection.context) throw fail("MCP_UNVERIFIED_CONNECTION", "请先验证目标项目的在线 Funplay");
     const client: Client = CLIENTS[clientId];
@@ -174,11 +174,11 @@ export async function registerFunplay({ connection, clientId, scope, timeoutMs, 
     }
     endpoint.pathname = scopedPath;
     const config: Config = { projectPath, host: endpoint.hostname.replace(/^\[|\]$/g, ""), port: Number(endpoint.port || 80) };
-    const funplay = await loadActiveFunplay(connection, homeDirectory, timeoutMs);
+    const funplay = await loadActiveFunplay(connection, homeDirectory, installSkills, timeoutMs);
     return withProjectLock(physicalRoot, () => {
         const skillOptions = { clientId: client.upstream };
-        const skillsState = funplay.skills.getProjectSkillsState(projectPath, skillOptions);
-        if (!skillsState.supported || skillsState.error || !Array.isArray(skillsState.builtIns)) {
+        const skillsState = funplay.skills?.getProjectSkillsState(projectPath, skillOptions);
+        if (skillsState && (!skillsState.supported || skillsState.error || !Array.isArray(skillsState.builtIns))) {
             throw fail("FUNPLAY_SKILLS_UNAVAILABLE", skillsState.error || "当前 Funplay 版本没有该客户端的 Skill 安装支持", [clientId]);
         }
 
@@ -268,9 +268,11 @@ export async function registerFunplay({ connection, clientId, scope, timeoutMs, 
         const installed: string[] = [];
         const preserved: string[] = [];
         const failed: { skillName: string; message: string }[] = [];
-        for (const skill of skillsState.builtIns) {
+        const paths: Record<string, string> = {};
+        for (const skill of skillsState?.builtIns ?? []) {
             if (skill.status !== "missing") {
                 preserved.push(skill.skillName);
+                if (skill.absolutePath) paths[skill.skillName] = skill.absolutePath;
                 continue;
             }
             try {
@@ -278,13 +280,15 @@ export async function registerFunplay({ connection, clientId, scope, timeoutMs, 
                     ...skillOptions, skillName: skill.skillName, onlyIfMissing: true, extensionVersion: funplay.version,
                 });
                 (result.installed ? installed : preserved).push(skill.skillName);
+                const path = result.state?.absolutePath ?? skill.absolutePath;
+                if (path) paths[skill.skillName] = path;
             } catch (error) {
                 failed.push({ skillName: skill.skillName, message: String(error.message ?? error) });
             }
         }
         return {
             ok: failed.length === 0, configured: true, client: clientId, scope, projectRoot: projectPath, projectConfigPath,
-            ...registration, skills: { installed, preserved, failed },
+            ...registration, skills: { requested: installSkills, installed, preserved, failed, paths },
         };
     });
 }

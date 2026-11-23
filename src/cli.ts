@@ -30,6 +30,7 @@ interface CliValues {
     logDest?: string;
     mcpUrl?: string;
     client?: FunplayClient;
+    skills?: boolean;
     scope?: "project" | "user";
     timeoutMs?: number;
     requestTimeoutMs?: number;
@@ -421,19 +422,23 @@ function registerCommands(options: Required<CliContext>, setExitCode: (code: num
         .option("--allow-unverified-editor", "允许尝试启动未核验版本的安装");
     action(restart, (values) => runLifecycle("restart", options, values));
 
-    const register = mcp.command("register").description("注册 Agent MCP 并补齐 Funplay Skills")
+    const register = mcp.command("register").description("注册 Agent MCP")
+        .option("--skills", "同时补齐缺失的 Funplay Skills")
         .addOption(new Option("--client <客户端>", "选择客户端").choices(FUNPLAY_CLIENTS).makeOptionMandatory())
         .addOption(new Option("--scope <作用域>", "客户端配置作用域").choices(["project", "user"]).default("project"));
     action(register, async (values) => {
         const { connection, timeoutMs } = await connectProjectMcp(makeLifecycleOptions(options, values));
-        const result = await registerFunplay({ connection, timeoutMs, clientId: values.client, scope: values.scope });
+        const result = await registerFunplay({ connection, timeoutMs, clientId: values.client, scope: values.scope, installSkills: values.skills });
         if (values.json) {
             options.output(JSON.stringify({ command: "mcp register", ...result }, null, 2));
         } else {
             options.output(`MCP 已注册：${result.configPath}`);
             options.output(`Funplay 项目配置：${result.projectConfigPath}`);
-            options.output(`Funplay Skills：安装 ${result.skills.installed.length}，保留 ${result.skills.preserved.length}。`);
-            for (const failure of result.skills.failed) options.errorOutput(`Skill ${failure.skillName} 安装失败：${failure.message}`);
+            if (result.skills.requested) {
+                options.output(`Funplay Skills：安装 ${result.skills.installed.length}，保留 ${result.skills.preserved.length}。`);
+                for (const [name, path] of Object.entries(result.skills.paths)) options.output(`  ${name}：${path}`);
+                for (const failure of result.skills.failed) options.errorOutput(`Skill ${failure.skillName} 安装失败：${failure.message}`);
+            }
             if (result.launchCommand) options.output(result.launchCommand);
             else options.output("在目标项目中重新加载客户端以启用 Funplay 工具。");
         }

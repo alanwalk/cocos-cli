@@ -99,7 +99,7 @@ cocos mcp doctor --project $projectA --json
 
 在临时 Creator 项目验证 `cocos mcp setup`、`setup --global`、`update`。全局路径应匹配该项目声明的 Creator 版本。核对 SHA256 失败时原扩展保持完好，成功更新时可从返回的 `backupPath` 找到旧扩展。测试全局安装时使用隔离的用户目录。
 
-连接就绪后运行 `cocos mcp register --client codex --json`。核对项目级 `.codex/config.toml` 的 URL，以及 `.agents/skills` 下的两套 Skill 和引用文件。对其他客户端重复相同检查，核对对应文件而非 Codex 路径。再次执行应保留既有 Skill 和其他 MCP 服务。
+连接就绪后运行 `cocos mcp register --client codex --skills --json`。核对项目级 `.codex/config.toml` 的 URL，以及 `.agents/skills` 下的两套 Skill 和引用文件。对其他客户端重复相同检查，核对对应文件而非 Codex 路径。再次执行应保留既有 Skill 和其他 MCP 服务。
 
 用错误项目端点验证注册被拒绝。用已有本地改动的 Skill 验证重跑保持原文。完成注册并重新加载客户端后，通过 Agent 的 Funplay 工具只读核验项目身份。
 
