@@ -72,10 +72,10 @@ $project = 'D:\Games\MyGame'
 
 构建退出码由官方文档定义。CI 需显式识别 `36` 为成功，`32` 为参数无效，`34` 为构建过程失败。命令行构建跳过常规编辑器主窗口，官方仍要求运行环境能够访问 GUI。 [官方退出码和 Jenkins 说明](https://docs.cocos.com/creator/3.8/manual/zh/editor/publish/publish-in-command-line.html#进程退出码)
 
-## 与工作区 `cocos-cli` 的关系
+## `cocos-cli` 命令
 
-- 工作区的 `open` 调用 Creator 可执行文件并传入 `--project`。兼容构建入口再传入 Creator 的 `--build`。
-- `ensure`、`status`、`doctor`、`stop` 和 `restart` 是工作区 CLI 的项目生命周期能力。
+- `cocos open` 调用 Creator 可执行文件并传入 `--project`。`cocos build` 另外传入 Creator 原生的 `--build` 参数。
+- `cocos mcp ensure`、`cocos mcp status`、`cocos mcp doctor`、`cocos mcp stop` 和 `cocos mcp restart` 通过 Funplay 管理或查询项目的编辑器实例。
 - 在 Windows 和 macOS 上，普通 `open` 默认采用 `--background`，显示 Creator 主窗口且不请求焦点。若 Creator 冷启动时自行切到前台，CLI 会尝试恢复原来的前台窗口或应用。显式传 `--foreground` 时，CLI 会请求焦点。`open` 的窗口操作无需 Funplay。
 
 本机核对的安装包文件包括 `app.asar!/launch/source/launch.ts`、`app.asar!/node_modules/@editor/setting/lib/browser/index.js` 和构建器的 `builtin/builder/@types/public/options.d.ts`。其中构建器类型声明位于安装包的 unpacked 目录。

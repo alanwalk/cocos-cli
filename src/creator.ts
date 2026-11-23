@@ -191,7 +191,6 @@ export function resolveCreator(options: CreatorOptions) {
         const result = {
             path: candidate.path,
             source: candidate.source,
-            version: options.version,
             requiredVersion: options.version,
             actualVersion: metadata.actualVersion,
             versionVerified: metadata.actualVersion !== null,

@@ -28,11 +28,13 @@ npx @alanwalk/cocos-cli --version
 | `cocos build --build-config <导出的JSON> --json` | 使用 Creator 原生命令构建。运行机器需要 Creator 支持的 GUI 环境。 |
 | `cocos mcp status` / `doctor` / `stop` / `restart` | 查看状态、诊断连接、正常退出或重启。 |
 
-省略 `--project` 时，CLI 从当前目录向上查找 Creator 项目。显式指定安装位置用 `--editor`。运行 `cocos --help` 或 `cocos <子命令> --help` 查看完整参数。
+省略 `--project` 时，CLI 从当前目录向上查找 Creator 3.x 项目。CLI 按项目声明的版本查找编辑器，并搜索 Windows 和 macOS 的常见安装目录。自定义安装位置可用 `--editor`。运行 `cocos --help` 或 `cocos <子命令> --help` 查看完整参数。
 
 ## MCP
 
 场景编辑、资源管理和预览等 MCP 能力由 [Funplay Cocos MCP](https://github.com/FunplayAI/funplay-cocos-mcp) 提供。`cocos mcp` 负责扩展安装、编辑器生命周期和客户端注册。
+
+连接以 Funplay 0.7.6 的接口为基准，使用 MCP 协议 `2025-11-25` 和工具的 `structuredContent` 结果。没有 Funplay 配置文件且未设置 `COCOS_MCP_PORT` 时，端口按项目派生。已有配置文件省略 `portMode` 时，Funplay 使用固定端口。
 
 | 命令 | 用途 |
 | --- | --- |

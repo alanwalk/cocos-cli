@@ -75,7 +75,7 @@ test("Windows 默认目录按项目版本生成", () => {
     );
 });
 
-test("macOS 同时检查新版和旧版默认目录", () => {
+test("macOS 在多个安装目录中查找同一 Creator 版本", () => {
     const candidates = getCreatorCandidates({
         platform: "darwin",
         version: "3.8.8",
@@ -143,7 +143,6 @@ test("实际版本从安装元数据读取，与项目声明分开返回", (t) =
     const editor = createInstallation(fixture.root, "creator-3.8.8", "3.8.7");
     const result = resolveInFixture(fixture, { editor: editor.executable });
 
-    assert.equal(result.version, "3.8.8");
     assert.equal(result.requiredVersion, "3.8.8");
     assert.equal(result.actualVersion, "3.8.7");
     assert.equal(result.versionVerified, true);

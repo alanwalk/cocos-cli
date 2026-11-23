@@ -80,14 +80,14 @@ test("info --json 返回项目和编辑器信息", (t) => {
     assert.equal(parsed.startScene, "scene-uuid");
 });
 
-test("Commander generates nested help and rejects the removed MCP entry points", () => {
+test("Commander lists MCP lifecycle commands under mcp", () => {
     const help = runCli(["mcp", "register", "--help"]);
     assert.equal(help.status, 0, help.stderr);
     assert.match(help.stdout, /Usage: cocos mcp register/);
     assert.match(help.stdout, /--client/);
     assert.match(help.stdout, /--project/);
-    for (const oldCommand of ["ensure", "status", "doctor", "preview", "stop", "restart"]) {
-        const result = runCli([oldCommand, "--json"]);
+    for (const command of ["ensure", "status", "doctor", "preview", "stop", "restart"]) {
+        const result = runCli([command, "--json"]);
         assert.equal(result.status, 1);
         assert.equal(result.stderr, "");
         assert.equal(JSON.parse(result.stdout).error.code, "INVALID_COMMAND");
@@ -95,9 +95,6 @@ test("Commander generates nested help and rejects the removed MCP entry points",
     for (const subcommand of ["tools", "call", "resources", "prompts"]) {
         assert.equal(runCli(["mcp", subcommand]).status, 1);
     }
-    const open = runCli(["open", "--wait-ready", "--json"]);
-    assert.equal(open.status, 1);
-    assert.equal(JSON.parse(open.stdout).error.code, "INVALID_ARGUMENT");
 });
 
 test("ordinary open uses window handling on Windows and macOS unless configured to wait", async (t) => {

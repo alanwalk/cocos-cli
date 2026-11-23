@@ -51,7 +51,7 @@ function funplayHandler(root, options = {}) {
         const headers = { "Content-Type": "application/json", "MCP-Protocol-Version": PROTOCOL };
         if (rpc.method === "initialize") {
             if (options.session) headers["Mcp-Session-Id"] = "fixture-session";
-            const result = { protocolVersion: PROTOCOL, serverInfo: { name: "funplay-cocos-mcp", version: "0.7.6" },
+            const result = { protocolVersion: options.initializeProtocol ?? PROTOCOL, serverInfo: { name: "funplay-cocos-mcp", version: "0.7.6" },
                 funplay: { server: "funplay-cocos-mcp", routingVersion: 1, projectIdentity: context.project_id, context } };
             res.writeHead(200, headers);
             res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }));
@@ -94,7 +94,7 @@ function funplayHandler(root, options = {}) {
     return { handler, calls };
 }
 
-test("discovery follows Funplay project hash, fixed config and bounded collision fallback", (t) => {
+test("discovery follows Funplay project hash, fixed ports and bounded collision fallback", (t) => {
     const project = fixture(t);
     const rootPath = project.root.replace(/\\/g, "/");
     const expectedId = createHash("sha256").update(`funplay-cocos-mcp:${process.platform === "win32" ? rootPath.toLowerCase() : rootPath}`).digest("hex").slice(0, 24);
@@ -103,7 +103,10 @@ test("discovery follows Funplay project hash, fixed config and bounded collision
     assert.equal(urls.length, 21);
     assert.equal(urls[0], `http://127.0.0.1:${getProjectPort(project.root)}/mcp/project/${expectedId}/`);
     assert.equal(Number(new URL(urls.at(-1)).port), getProjectPort(project.root) + 20);
-    writeFileSync(join(project.root, "funplay-cocos-mcp.config.json"), JSON.stringify({ port: 8765 }));
+    const configPath = join(project.root, "funplay-cocos-mcp.config.json");
+    writeFileSync(configPath, JSON.stringify({ portMode: "fixed", port: 8766 }));
+    assert.equal(new URL(discoverMcpEndpoints({ projectRoot: project.root, env: {} })[0]).port, "8766");
+    writeFileSync(configPath, JSON.stringify({ port: 8765 }));
     assert.equal(new URL(discoverMcpEndpoints({ projectRoot: project.root, env: {} })[0]).port, "8765");
     assert.equal(new URL(discoverMcpEndpoints({ projectRoot: project.root, env: { COCOS_MCP_PORT: "9876" } })[0]).port, "9876");
     const saved = "http://127.0.0.1:8888/mcp";
@@ -143,12 +146,36 @@ test("probe verifies actual Funplay envelopes, scoped path, session and version"
     assert.ok(fake.calls.every((call) => call.url === new URL(endpoint).pathname));
 });
 
-test("simple SSE responses and text-only tool envelopes are supported", async (t) => {
+test("structured tool responses can arrive over SSE", async (t) => {
     const project = fixture(t);
-    const fake = funplayHandler(project.root, { sse: true, textOnly: true });
+    const fake = funplayHandler(project.root, { sse: true });
     const base = await serve(t, fake.handler);
     const connection = await probeMcp({ url: `${base}/mcp`, projectRoot: project.root, timeoutMs: 1500 });
     assert.equal(connection.ready, true, JSON.stringify(connection.error));
+});
+
+test("initialize rejects a different protocol before calling any tools", async (t) => {
+    const project = fixture(t);
+    const fake = funplayHandler(project.root, { initializeProtocol: "2025-06-18" });
+    const base = await serve(t, fake.handler);
+    const connection = await probeMcp({ url: base, projectRoot: project.root });
+    assert.equal(connection.ready, false);
+    assert.equal(connection.reachable, true);
+    assert.equal(connection.projectMatched, false);
+    assert.equal(connection.error.code, "MCP_PROTOCOL_ERROR");
+    assert.match(connection.error.message, /2025-11-25/);
+    assert.deepEqual(fake.calls.map(({ rpc }) => rpc.method), ["initialize"]);
+});
+
+test("Funplay tools require a structured result even when text contains the envelope", async (t) => {
+    const project = fixture(t);
+    const fake = funplayHandler(project.root, { textOnly: true });
+    const base = await serve(t, fake.handler);
+    const connection = await probeMcp({ url: base, projectRoot: project.root });
+    assert.equal(connection.ready, false);
+    assert.equal(connection.projectMatched, true);
+    assert.equal(connection.error.code, "MCP_PROTOCOL_ERROR");
+    assert.match(connection.error.message, /structuredContent/);
 });
 
 test("wrong project is rejected before any tool calls", async (t) => {

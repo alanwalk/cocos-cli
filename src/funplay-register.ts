@@ -138,7 +138,7 @@ function readProjectRegistrationConfig(text: string | null, path: string, connec
             }
             return { portMode: "fixed", port, clientConfigEntries: {} as Record<string, Registration> };
         }
-        // Funplay treats an existing file without portMode as a legacy fixed-port config.
+        // Explicitly match Funplay's project-derived default when creating the config.
         return { portMode: "project", clientConfigEntries: {} as Record<string, Registration> };
     }
 

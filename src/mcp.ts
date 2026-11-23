@@ -8,7 +8,6 @@ import { packageManifest } from "./package-info.js";
 
 // Funplay Cocos MCP v0.7.6: lib/config.js, lib/project-context.js and lib/server.js.
 const PROTOCOL_VERSION = "2025-11-25";
-const SUPPORTED_PROTOCOLS = new Set([PROTOCOL_VERSION, "2025-06-18", "2025-03-26", "2024-11-05"]);
 const CONTEXT_KEY = "io.funplay.cocos/context";
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 3000;
@@ -77,7 +76,7 @@ function validPort(value) {
 }
 
 /** Explicit URLs are authoritative; automatic discovery is bounded to Funplay's +20 fallback. */
-export function discoverMcpEndpoints({ projectRoot, explicitUrl, stateEndpoint, env = process.env, config = {} }: { projectRoot: string; explicitUrl?: string; stateEndpoint?: string; env?: NodeJS.ProcessEnv; config?: { url?: string; host?: string; port?: number; portMode?: string } }) {
+export function discoverMcpEndpoints({ projectRoot, explicitUrl, stateEndpoint, env = process.env, config = {} }: { projectRoot: string; explicitUrl?: string; stateEndpoint?: string; env?: NodeJS.ProcessEnv; config?: { url?: string } }) {
     normalizeProjectPath(projectRoot);
     const configuredUrl = explicitUrl ?? env.COCOS_CLI_MCP_URL ?? config.url;
     if (configuredUrl !== undefined) return [normalizeMcpEndpoint(configuredUrl)];
@@ -101,6 +100,7 @@ export function discoverMcpEndpoints({ projectRoot, explicitUrl, stateEndpoint, 
             throw fail("MCP_INVALID_CONFIG", `无法读取 Funplay MCP 配置: ${error.message}`, [configPath]);
         }
     }
+    // Funplay uses a fixed port for existing config files that omit portMode.
     const mode = fileConfig.portMode === "project" || (!configExists && !env.COCOS_MCP_PORT) ? "project" : "fixed";
     let host = String(env.COCOS_MCP_HOST || fileConfig.host || "127.0.0.1");
     if (host === "0.0.0.0") host = "127.0.0.1";
@@ -228,14 +228,13 @@ async function readResponse(response, requestId, maxBytes, notification) {
     }
 }
 
-async function rpcRequest({ url, method, params, sessionId = undefined, protocolVersion = PROTOCOL_VERSION,
+async function rpcRequest({ url, method, params, sessionId = undefined,
     timeoutMs = DEFAULT_TIMEOUT_MS, fetchImpl = globalThis.fetch, maxResponseBytes = MAX_RESPONSE_BYTES, notification = false }) {
     const endpoint = normalizeMcpEndpoint(url);
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw fail("MCP_TIMEOUT", "等待 MCP 响应超时。");
     if (!Number.isInteger(maxResponseBytes) || maxResponseBytes < 1 || maxResponseBytes > 8 * 1024 * 1024) {
         throw fail("MCP_INVALID_LIMIT", "MCP 响应大小限制必须在 1 字节至 8 MiB 之间。");
     }
-    if (!SUPPORTED_PROTOCOLS.has(protocolVersion)) throw fail("MCP_PROTOCOL_ERROR", "不支持的 MCP 协议版本。");
     if (sessionId !== undefined && (typeof sessionId !== "string" || !/^[\x21-\x7e]{1,1024}$/.test(sessionId))) {
         throw fail("MCP_PROTOCOL_ERROR", "MCP session id 不合法。");
     }
@@ -247,7 +246,7 @@ async function rpcRequest({ url, method, params, sessionId = undefined, protocol
     const body = JSON.stringify({ jsonrpc: "2.0", ...(notification ? {} : { id }), method, params });
     if (Buffer.byteLength(body) > MAX_RESPONSE_BYTES) throw fail("MCP_REQUEST_TOO_LARGE", "MCP 请求超过大小限制。");
     const operation = async () => {
-        const headers = { "Content-Type": "application/json", Accept: "application/json, text/event-stream", "MCP-Protocol-Version": protocolVersion };
+        const headers = { "Content-Type": "application/json", Accept: "application/json, text/event-stream", "MCP-Protocol-Version": PROTOCOL_VERSION };
         if (sessionId) headers["Mcp-Session-Id"] = sessionId;
         const response = await fetchImpl(endpoint, { method: "POST", headers, body, signal: controller.signal, redirect: "manual" });
         reachable = true;
@@ -256,9 +255,9 @@ async function rpcRequest({ url, method, params, sessionId = undefined, protocol
             throw fail("MCP_REDIRECT_REJECTED", "MCP 不跟随 HTTP 重定向。");
         }
         const receivedProtocol = response.headers.get("mcp-protocol-version");
-        if (receivedProtocol && (!SUPPORTED_PROTOCOLS.has(receivedProtocol) || (method !== "initialize" && receivedProtocol !== protocolVersion))) {
+        if (receivedProtocol !== null && receivedProtocol !== PROTOCOL_VERSION) {
             await response.body?.cancel();
-            throw fail("MCP_PROTOCOL_ERROR", "MCP 响应协议版本不匹配。");
+            throw fail("MCP_PROTOCOL_ERROR", `MCP 响应协议版本不匹配，要求 ${PROTOCOL_VERSION}。`);
         }
         const payload = await readResponse(response, id, maxResponseBytes, notification && response.ok);
         if (!response.ok) throw remoteError(payload, response.status);
@@ -269,7 +268,7 @@ async function rpcRequest({ url, method, params, sessionId = undefined, protocol
             }
             if (payload.error) throw remoteError(payload, response.status);
         }
-        return { result: payload?.result, sessionId: response.headers.get("mcp-session-id") || undefined, protocolVersion: receivedProtocol || undefined };
+        return { result: payload?.result, sessionId: response.headers.get("mcp-session-id") || undefined };
     };
     try {
         return await Promise.race([
@@ -300,18 +299,9 @@ function unwrapToolResult(result, connection, name) {
         const message = result.content?.find((part) => part.type === "text")?.text || "工具返回错误";
         throw fail("MCP_TOOL_ERROR", `MCP 工具 ${name} 失败: ${String(message).slice(0, 2000)}`);
     }
-    let envelope = result.structuredContent;
-    if (envelope === undefined) {
-        for (const part of result.content || []) {
-            if (part.type !== "text" || typeof part.text !== "string") continue;
-            try {
-                const value = JSON.parse(part.text);
-                if (record(value) && value.tool === name) { envelope = value; break; }
-            } catch { /* Other text/image blocks are not structured results. */ }
-        }
-    }
+    const envelope = result.structuredContent;
     if (!record(envelope) || typeof envelope.ok !== "boolean" || envelope.tool !== name || !Object.hasOwn(envelope, "data")) {
-        throw fail("MCP_PROTOCOL_ERROR", `MCP 工具 ${name} 缺少 Funplay 结果 envelope。`);
+        throw fail("MCP_PROTOCOL_ERROR", `MCP 工具 ${name} 缺少有效的 Funplay structuredContent 结果。`);
     }
     assertContext(envelope.projectContext, connection.projectRoot, connection.context);
     if (!envelope.ok) throw fail("MCP_TOOL_ERROR", `MCP 工具 ${name} 返回失败。`, [envelope.summary || ""]);
@@ -331,7 +321,7 @@ export async function callMcpTool({ connection, name, args = {}, timeoutMs = DEF
     }
     const response = await rpcRequest({ url: connection.endpoint, method: "tools/call",
         params: { name, arguments: { ...args, expected_context: token }, _meta: { expected_context: token } },
-        sessionId: connection.sessionId, protocolVersion: connection.protocolVersion, timeoutMs, fetchImpl, maxResponseBytes });
+        sessionId: connection.sessionId, timeoutMs, fetchImpl, maxResponseBytes });
     if (response.sessionId && response.sessionId !== connection.sessionId) {
         throw fail("MCP_SESSION_CHANGED", "MCP 工具响应更改了 session id，请重新连接。");
     }
@@ -387,10 +377,11 @@ export async function probeMcp({ url, projectRoot, expectedVersion, timeoutMs = 
         }, timeoutMs: remaining(), fetchImpl, maxResponseBytes });
         connection.reachable = true;
         const initialized = response.result;
-        if (!record(initialized) || !SUPPORTED_PROTOCOLS.has(initialized.protocolVersion)
-            || initialized.funplay?.server !== "funplay-cocos-mcp" || initialized.funplay?.routingVersion !== 1
-            || (response.protocolVersion && response.protocolVersion !== initialized.protocolVersion)) {
+        if (!record(initialized) || initialized.funplay?.server !== "funplay-cocos-mcp" || initialized.funplay?.routingVersion !== 1) {
             throw fail("MCP_PROTOCOL_ERROR", "端点没有返回受支持的 Funplay MCP initialize 响应。");
+        }
+        if (initialized.protocolVersion !== PROTOCOL_VERSION) {
+            throw fail("MCP_PROTOCOL_ERROR", `Funplay MCP 初始化协议版本不匹配，要求 ${PROTOCOL_VERSION}。`);
         }
         const context = initialized.funplay.context;
         assertContext(context, projectRoot);
@@ -401,7 +392,7 @@ export async function probeMcp({ url, projectRoot, expectedVersion, timeoutMs = 
             sessionId: response.sessionId, protocolVersion: initialized.protocolVersion,
             serverInfo: initialized.serverInfo, expectedVersion: expectedVersion || undefined });
         await rpcRequest({ url: connection.endpoint, method: "notifications/initialized", params: {},
-            sessionId: connection.sessionId, protocolVersion: connection.protocolVersion, notification: true,
+            sessionId: connection.sessionId, notification: true,
             timeoutMs: remaining(), fetchImpl, maxResponseBytes });
         const info = await callMcpTool({ connection, name: "get_project_info", timeoutMs: remaining(), fetchImpl, maxResponseBytes });
         assertProjectData(info.data, connection, { identity: true });

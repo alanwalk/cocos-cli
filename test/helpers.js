@@ -1,9 +1,9 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export function createProjectFixture(options = {}) {
-    const root = mkdtempSync(join(tmpdir(), "alanwalk-cocos-cli-"));
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "alanwalk-cocos-cli-"));
     const version = options.version ?? "3.8.8";
     mkdirSync(join(root, "assets", "scripts"), { recursive: true });
     writeFileSync(

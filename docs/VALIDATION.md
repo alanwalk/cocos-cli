@@ -98,6 +98,7 @@ cocos mcp doctor --project $projectA --json
 
 - 冷启动和重复 `ensure` 分别检查 `launched` 与 `reused`。双终端同时启动同一项目时，检查只出现一个 Creator 实例。`status` / `doctor` 在 MCP 未就绪时应返回 `2`。
 - 核对 `mcp.endpoint` 和返回的目标项目、实际 Creator 版本、项目 ID。给 A 显式指定 B 的 `--mcp-url` 时应拒绝。给冷启动指定已知不同版本的安装时也应拒绝。
+- 协议基准为 Funplay 0.7.6。自动测试覆盖 `2025-11-25` 初始化、JSON 和 SSE 中的 `structuredContent` 结果，以及对其他协议版本和纯文本结果的拒绝。
 - 关闭临时项目的 Funplay 服务及其自动启动配置后验证 `ensure --timeout-ms 15000 --request-timeout-ms 1000 --json`。确认到期返回，并保持仍在运行的 Creator。恢复服务后，`ensure` 应能复用实例。
 - 在目标项目的 `.codex/config.toml` 配置项目 URL。分别在项目目录和项目外运行 `codex mcp list`，核对项目级注册作用域。用该工作区的新聊天检查 Funplay 工具可用性及项目路径。
 
@@ -106,6 +107,8 @@ cocos mcp doctor --project $projectA --json
 在临时 Creator 项目验证 `cocos mcp setup`、`setup --global`、`update`。全局路径应匹配该项目声明的 Creator 版本。核对 SHA256 失败时原扩展保持完好，成功更新时可从返回的 `backupPath` 找到旧扩展。测试全局安装时使用隔离的用户目录。
 
 连接就绪后运行 `cocos mcp register --client codex --skills --json`。核对项目级 `.codex/config.toml` 的 URL，以及 `.agents/skills` 下的两套 Skill 和引用文件。对其他客户端重复相同检查，核对对应文件而非 Codex 路径。再次执行应保留既有 Skill 和其他 MCP 服务。
+
+用已有固定端口的项目复跑发现和注册，包括 `funplay-cocos-mcp.config.json` 中只有 `port`、省略 `portMode` 的情况。核对发现使用该固定端口，注册保留原端口设置。
 
 用错误项目端点验证注册被拒绝。用已有本地改动的 Skill 验证重跑保持原文。完成注册并重新加载客户端后，通过 Agent 的 Funplay 工具只读核验项目身份。
 
