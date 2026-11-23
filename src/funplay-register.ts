@@ -127,6 +127,34 @@ async function loadActiveFunplay(connection: Connection, home: string, timeoutMs
     };
 }
 
+function readProjectRegistrationConfig(text: string | null, path: string, connection: Connection) {
+    if (text === null) {
+        const state = connection.editorState as { status?: { portMode?: unknown; requestedPort?: number } } | undefined;
+        const status = state?.status;
+        if (status?.portMode === "fixed") {
+            const port = status.requestedPort;
+            if (!Number.isInteger(port) || port < 1 || port > 65535) {
+                throw fail("FUNPLAY_INVALID_PROJECT_CONFIG", "无法确认 Funplay 的固定端口", [path]);
+            }
+            return { portMode: "fixed", port, clientConfigEntries: {} as Record<string, Registration> };
+        }
+        // Funplay treats an existing file without portMode as a legacy fixed-port config.
+        return { portMode: "project", clientConfigEntries: {} as Record<string, Registration> };
+    }
+
+    try {
+        const previous = JSON.parse(text) as { clientConfigEntries?: Record<string, Registration> };
+        if (!previous || typeof previous !== "object" || Array.isArray(previous)) throw Error("配置根节点必须是对象");
+        const entries = previous.clientConfigEntries;
+        if (entries !== undefined && (!entries || typeof entries !== "object" || Array.isArray(entries))) {
+            throw Error("clientConfigEntries 必须是对象");
+        }
+        return { ...previous, clientConfigEntries: entries ?? {} };
+    } catch (error) {
+        throw fail("FUNPLAY_INVALID_PROJECT_CONFIG", "无法安全合并 Funplay 项目配置", [path, error.message]);
+    }
+}
+
 export async function registerFunplay({ connection, clientId, scope, timeoutMs, homeDirectory = homedir() }: {
     connection: Connection; clientId: FunplayClient; scope: Scope; timeoutMs?: number; homeDirectory?: string;
 }) {
@@ -154,6 +182,12 @@ export async function registerFunplay({ connection, clientId, scope, timeoutMs, 
             throw fail("FUNPLAY_SKILLS_UNAVAILABLE", skillsState.error || "当前 Funplay 版本没有该客户端的 Skill 安装支持", [clientId]);
         }
 
+        const projectConfigPath = join(projectPath, "funplay-cocos-mcp.config.json");
+        assertContained(projectPath, projectConfigPath);
+        const projectConfigBefore = funplay.readText(projectConfigPath);
+        const projectConfig = readProjectRegistrationConfig(projectConfigBefore, projectConfigPath, connection);
+        const previousClientEntry = projectConfig.clientConfigEntries[client.upstream];
+
         const { directory } = getProjectStatePaths(physicalRoot);
         const receiptPath = join(directory, "funplay-registrations.json");
         assertContained(directory, receiptPath);
@@ -163,7 +197,6 @@ export async function registerFunplay({ connection, clientId, scope, timeoutMs, 
             throw fail("FUNPLAY_INVALID_REGISTRATION_STATE", "MCP 注册记录不是 JSON 对象", [receiptPath]);
         }
         const key = clientId + ":" + scope;
-        const previous = receipts[key];
         const staging = mkdtempSync(join(directory, "funplay-register-"));
         let registration: ReturnType<ClientConfig["configureTarget"]>;
         try {
@@ -198,7 +231,8 @@ export async function registerFunplay({ connection, clientId, scope, timeoutMs, 
                     writeFileSync(destination.configPath, before, { flag: "wx" });
                 }
             }
-            if (previous?.configPath === configPath) {
+            const previous = [receipts[key], previousClientEntry].find((entry) => entry?.configPath === configPath);
+            if (previous) {
                 config.clientConfigEntries = { [writer]: { ...previous, configPath: destination.configPath } };
             }
             registration = funplay.config.configureTarget(config, writer, writerOptions);
@@ -215,6 +249,18 @@ export async function registerFunplay({ connection, clientId, scope, timeoutMs, 
             receipts[key] = registration;
             const receiptAfter = JSON.stringify(receipts, null, 2) + "\n";
             if (receiptAfter !== receiptBefore) funplay.writeText(receiptPath, receiptAfter, receiptBefore);
+
+            const { serverName, url, projectIdentity } = registration;
+            const clientEntry = { ...previousClientEntry, serverName, url, configPath, projectIdentity };
+            if (JSON.stringify(clientEntry) !== JSON.stringify(previousClientEntry)) {
+                projectConfig.clientConfigEntries[client.upstream] = clientEntry;
+                assertContained(projectPath, projectConfigPath);
+                try {
+                    funplay.writeText(projectConfigPath, JSON.stringify(projectConfig, null, 2) + "\n", projectConfigBefore);
+                } catch (error) {
+                    throw fail("FUNPLAY_PROJECT_CONFIG_WRITE_FAILED", "客户端 MCP 已写入，但 Funplay 项目配置写入失败，请重试 register", [projectConfigPath, error.message]);
+                }
+            }
         } finally {
             rmSync(staging, { recursive: true, force: true });
         }
@@ -237,7 +283,7 @@ export async function registerFunplay({ connection, clientId, scope, timeoutMs, 
             }
         }
         return {
-            ok: failed.length === 0, configured: true, client: clientId, scope, projectRoot: projectPath,
+            ok: failed.length === 0, configured: true, client: clientId, scope, projectRoot: projectPath, projectConfigPath,
             ...registration, skills: { installed, preserved, failed },
         };
     });

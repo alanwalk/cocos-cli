@@ -431,6 +431,7 @@ function registerCommands(options: Required<CliContext>, setExitCode: (code: num
             options.output(JSON.stringify({ command: "mcp register", ...result }, null, 2));
         } else {
             options.output(`MCP 已注册：${result.configPath}`);
+            options.output(`Funplay 项目配置：${result.projectConfigPath}`);
             options.output(`Funplay Skills：安装 ${result.skills.installed.length}，保留 ${result.skills.preserved.length}。`);
             for (const failure of result.skills.failed) options.errorOutput(`Skill ${failure.skillName} 安装失败：${failure.message}`);
             if (result.launchCommand) options.output(result.launchCommand);

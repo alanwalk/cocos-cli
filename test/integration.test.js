@@ -110,7 +110,7 @@ async function startFunplay(t, root, options = {}) {
                 projectPath: root,
                 cocosVersion: info.cocosVersion,
                 toolProfile: "core",
-                status: { ...info, running: true, url: endpoint },
+                status: { ...info, running: true, url: endpoint, portMode: options.portMode ?? "project", requestedPort: options.requestedPort },
                 selection: {},
                 scene: { sceneName: "Main", uuid: "integration-scene", childCount: 0 },
                 windows: [],
@@ -325,7 +325,8 @@ test("integration: register writes the project config and installs only missing 
         '  return { installed: true };',
         '};',
     ].join("\n"));
-    const server = await startFunplay(t, project.root, { packagePath });
+    const status = { packagePath };
+    const server = await startFunplay(t, project.root, status);
     const args = ["mcp", "register", "--client", "codex"];
     const extra = ["--mcp-url", server.endpoint];
     const target = join(project.root, ".codex", "config.toml");
@@ -337,6 +338,18 @@ test("integration: register writes the project config and installs only missing 
     assert.equal(first.code, 1, first.stdout);
     assert.equal(first.data.configured, true);
     assert.equal(first.data.configPath, target);
+    const funplayConfig = join(project.root, "funplay-cocos-mcp.config.json");
+    assert.equal(first.data.projectConfigPath, funplayConfig);
+    const created = JSON.parse(readFileSync(funplayConfig, "utf8"));
+    assert.equal(created.portMode, "project");
+    assert.equal(created.port, undefined);
+    assert.deepEqual(created.clientConfigEntries.codex, {
+        serverName: "funplay", configPath: target, url: server.endpoint, projectIdentity: server.context.project_id,
+    });
+    writeFileSync(funplayConfig, JSON.stringify({
+        port: 8765, autostart: false, toolProfile: "custom",
+        clientConfigEntries: { cursor: { url: "unrelated" } },
+    }));
     assert.equal(server.requests.at(-1).params.name, "execute_javascript");
     assert.equal(first.data.skills.installed.length, 1);
     assert.equal(first.data.skills.failed[0].skillName, "funplay-cocos-ui-composition");
@@ -350,6 +363,20 @@ test("integration: register writes the project config and installs only missing 
     assert.equal(again.data.skills.preserved.length, 1);
     assert.deepEqual(again.data.skills.installed, ["funplay-cocos-ui-composition"]);
     assert.equal(readFileSync(workflow, "utf8"), "user edits");
+    const merged = JSON.parse(readFileSync(funplayConfig, "utf8"));
+    assert.deepEqual(merged, {
+        port: 8765, autostart: false, toolProfile: "custom",
+        clientConfigEntries: { cursor: { url: "unrelated" }, codex: created.clientConfigEntries.codex },
+    });
+    unlinkSync(funplayConfig);
+    status.portMode = "fixed";
+    status.requestedPort = 8765;
+    const fixed = await runCli(project, args, extra);
+    assert.equal(fixed.code, 0, fixed.stdout);
+    const fixedConfig = JSON.parse(readFileSync(funplayConfig, "utf8"));
+    assert.equal(fixedConfig.portMode, "fixed");
+    assert.equal(fixedConfig.port, 8765, "Keep the configured port, not the live fallback");
+    assert.equal(fixedConfig.clientConfigEntries.codex.url, server.endpoint);
 });
 
 test("integration: package discovery rejects unavailable tools and paths outside Funplay installations", async (t) => {
