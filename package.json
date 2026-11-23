@@ -1,0 +1,54 @@
+{
+    "name": "@alanwalk/cocos-cli",
+    "version": "1.0.0",
+    "description": "Cocos Creator 3.x launcher and verified Funplay MCP connection companion.",
+    "type": "module",
+    "main": "./dist/index.js",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "bin": {
+        "cocos": "./bin/cocos.js"
+    },
+    "files": [
+        "bin",
+        "dist",
+        "README.md",
+        "CHANGELOG.md",
+        "docs"
+    ],
+    "scripts": {
+        "test": "npm run build && node scripts/test.js",
+        "check": "tsc -p tsconfig.json --noEmit && node scripts/check.js",
+        "prepack": "npm test && npm run check",
+        "build": "tsc -p tsconfig.json"
+    },
+    "engines": {
+        "node": ">=20"
+    },
+    "keywords": [
+        "cocos",
+        "cocos-creator",
+        "cli",
+        "build",
+        "creator"
+    ],
+    "license": "MIT",
+    "publishConfig": {
+        "access": "public"
+    },
+    "sideEffects": false,
+    "devDependencies": {
+        "@types/node": "20.19.24",
+        "typescript": "5.9.3"
+    },
+    "types": "./dist/index.d.ts",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/alanwalk/cocos-cli.git"
+    }
+}
