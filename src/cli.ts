@@ -425,8 +425,8 @@ function registerCommands(options: Required<CliContext>, setExitCode: (code: num
         .addOption(new Option("--client <客户端>", "选择客户端").choices(FUNPLAY_CLIENTS).makeOptionMandatory())
         .addOption(new Option("--scope <作用域>", "客户端配置作用域").choices(["project", "user"]).default("project"));
     action(register, async (values) => {
-        const { connection } = await connectProjectMcp(makeLifecycleOptions(options, values));
-        const result = await registerFunplay({ connection, clientId: values.client, scope: values.scope });
+        const { connection, timeoutMs } = await connectProjectMcp(makeLifecycleOptions(options, values));
+        const result = await registerFunplay({ connection, timeoutMs, clientId: values.client, scope: values.scope });
         if (values.json) {
             options.output(JSON.stringify({ command: "mcp register", ...result }, null, 2));
         } else {

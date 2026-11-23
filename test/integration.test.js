@@ -80,7 +80,16 @@ async function startFunplay(t, root, options = {}) {
             assert.equal(rpc.method, "tools/call");
             assert.equal(rpc.params.arguments.expected_context, context.expected_context);
             const name = rpc.params.name;
-            assert.ok(["get_project_info", "get_editor_state"].includes(name), `Readiness commands must not call mutating tools: ${name}`);
+            assert.ok(["get_project_info", "get_editor_state", "execute_javascript"].includes(name), `Unexpected tool: ${name}`);
+            if (name === "execute_javascript") {
+                assert.equal(rpc.params.arguments.context, "editor");
+                assert.equal(rpc.params.arguments.code, "function run({ context }) { return { packagePath: context.packagePath }; }");
+                assert.equal(rpc.params.arguments.safety_checks, undefined);
+                if (!options.packagePath) {
+                    reply({ isError: true, content: [{ type: "text", text: "Unknown tool: execute_javascript" }], _meta: { [CONTEXT_KEY]: context } });
+                    return;
+                }
+            }
             const info = {
                 extensionName: "funplay-cocos-mcp",
                 version: "0.7.6",
@@ -91,14 +100,17 @@ async function startFunplay(t, root, options = {}) {
                 cocosVersion: options.editorVersion ?? "3.8.8",
                 config: { toolProfile: "core", enableSessions: true },
             };
-            const data = name === "get_project_info" ? info : {
+            let data;
+            if (name === "execute_javascript") data = { packagePath: options.packagePath };
+            else if (name === "get_project_info") data = info;
+            else data = {
                 extensionName: info.extensionName,
                 version: info.version,
                 projectName: info.projectName,
                 projectPath: root,
                 cocosVersion: info.cocosVersion,
                 toolProfile: "core",
-                status: { ...info, running: true, url: endpoint, packagePath: options.packagePath },
+                status: { ...info, running: true, url: endpoint },
                 selection: {},
                 scene: { sceneName: "Main", uuid: "integration-scene", childCount: 0 },
                 windows: [],
@@ -325,6 +337,7 @@ test("integration: register writes the project config and installs only missing 
     assert.equal(first.code, 1, first.stdout);
     assert.equal(first.data.configured, true);
     assert.equal(first.data.configPath, target);
+    assert.equal(server.requests.at(-1).params.name, "execute_javascript");
     assert.equal(first.data.skills.installed.length, 1);
     assert.equal(first.data.skills.failed[0].skillName, "funplay-cocos-ui-composition");
     unlinkSync(failureMarker);
@@ -337,4 +350,18 @@ test("integration: register writes the project config and installs only missing 
     assert.equal(again.data.skills.preserved.length, 1);
     assert.deepEqual(again.data.skills.installed, ["funplay-cocos-ui-composition"]);
     assert.equal(readFileSync(workflow, "utf8"), "user edits");
+});
+
+test("integration: package discovery rejects unavailable tools and paths outside Funplay installations", async (t) => {
+    const project = projectFixture(t);
+    for (const packagePath of [undefined, project.root]) {
+        const server = await startFunplay(t, project.root, { packagePath });
+        const result = await runCli(project, ["mcp", "register", "--client", "codex"], ["--mcp-url", server.endpoint]);
+        assert.equal(result.code, 1, result.stdout);
+        assert.equal(result.data.error.code, "FUNPLAY_PACKAGE_UNKNOWN");
+        assert.match(result.data.error.message, packagePath ? /不在目标项目/ : /execute_javascript/);
+        assert.equal(server.requests.at(-1).params.name, "execute_javascript");
+        assert.equal(existsSync(join(project.root, ".codex")), false);
+        assert.equal(existsSync(join(project.root, ".agents")), false);
+    }
 });

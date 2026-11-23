@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import { CocosCliError } from "./errors.js";
-import type { probeMcp } from "./mcp.js";
+import { callMcpTool, type probeMcp } from "./mcp.js";
 import { getProjectStatePaths, withProjectLock } from "./state.js";
 
 const CLIENTS = {
@@ -76,11 +76,30 @@ function assertContained(root: string, target: string) {
     }
 }
 
-function loadActiveFunplay(connection: Connection, home: string) {
-    const state = connection.editorState as { status?: { packagePath?: string } } | undefined;
-    const reportedPath = state?.status?.packagePath;
+async function loadActiveFunplay(connection: Connection, home: string, timeoutMs?: number) {
+    const state = connection.editorState as { version?: string; status?: { packagePath?: unknown } } | undefined;
     const version = connection.editorVersion;
-    if (!reportedPath || !isAbsolute(reportedPath) || !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version ?? "")) {
+    if (!/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version ?? "")) {
+        throw fail("FUNPLAY_PACKAGE_UNKNOWN", "无法根据在线 Creator 版本识别 Funplay 安装目录");
+    }
+
+    let reportedPath = state?.status?.packagePath;
+    // Funplay 0.7.6 exposes packagePath in script context rather than get_editor_state.
+    if (reportedPath === undefined || reportedPath === null) {
+        try {
+            const result = await callMcpTool({
+                connection,
+                name: "execute_javascript",
+                args: { context: "editor", code: "function run({ context }) { return { packagePath: context.packagePath }; }" },
+                timeoutMs,
+            });
+            reportedPath = result.data?.packagePath;
+        } catch (error) {
+            if (!(error instanceof CocosCliError) || error.code !== "MCP_TOOL_ERROR") throw error;
+            throw fail("FUNPLAY_PACKAGE_UNKNOWN", "Funplay 状态缺少安装目录，且无法通过 execute_javascript 读取，请确认工具已启用", [error.message]);
+        }
+    }
+    if (typeof reportedPath !== "string" || !isAbsolute(reportedPath)) {
         throw fail("FUNPLAY_PACKAGE_UNKNOWN", "在线 Funplay 未提供可识别的安装目录");
     }
     const active = realPath(reportedPath);
@@ -93,7 +112,12 @@ function loadActiveFunplay(connection: Connection, home: string) {
     }
     const require = createRequire(join(active, "package.json"));
     const manifest = require("./package.json");
-    if (manifest.name !== "funplay-cocos-mcp") throw fail("FUNPLAY_INVALID_INSTALLATION", "安装目录不是 Funplay 扩展");
+    if (manifest.name !== "funplay-cocos-mcp" || typeof manifest.version !== "string") {
+        throw fail("FUNPLAY_INVALID_INSTALLATION", "安装目录不是可识别的 Funplay 扩展");
+    }
+    if (state?.version && manifest.version !== state.version) {
+        throw fail("FUNPLAY_PACKAGE_VERSION_MISMATCH", "磁盘中的 Funplay 版本与运行中的扩展不一致，请重开项目后再注册", [active]);
+    }
     return {
         version: String(manifest.version),
         config: require("./lib/client-config.js") as ClientConfig,
@@ -103,8 +127,8 @@ function loadActiveFunplay(connection: Connection, home: string) {
     };
 }
 
-export async function registerFunplay({ connection, clientId, scope, homeDirectory = homedir() }: {
-    connection: Connection; clientId: FunplayClient; scope: Scope; homeDirectory?: string;
+export async function registerFunplay({ connection, clientId, scope, timeoutMs, homeDirectory = homedir() }: {
+    connection: Connection; clientId: FunplayClient; scope: Scope; timeoutMs?: number; homeDirectory?: string;
 }) {
     if (!connection.ready || !connection.context) throw fail("MCP_UNVERIFIED_CONNECTION", "请先验证目标项目的在线 Funplay");
     const client: Client = CLIENTS[clientId];
@@ -122,7 +146,7 @@ export async function registerFunplay({ connection, clientId, scope, homeDirecto
     }
     endpoint.pathname = scopedPath;
     const config: Config = { projectPath, host: endpoint.hostname.replace(/^\[|\]$/g, ""), port: Number(endpoint.port || 80) };
-    const funplay = loadActiveFunplay(connection, homeDirectory);
+    const funplay = await loadActiveFunplay(connection, homeDirectory, timeoutMs);
     return withProjectLock(physicalRoot, () => {
         const skillOptions = { clientId: client.upstream };
         const skillsState = funplay.skills.getProjectSkillsState(projectPath, skillOptions);
