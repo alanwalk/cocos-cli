@@ -76,6 +76,6 @@ $project = 'D:\Games\MyGame'
 
 - 工作区的 `open` 调用 Creator 可执行文件并传入 `--project`。兼容构建入口再传入 Creator 的 `--build`。
 - `ensure`、`status`、`doctor`、`stop` 和 `restart` 是工作区 CLI 的项目生命周期能力。
-- `--foreground` 和 `--background` 由工作区 CLI 通过 Windows API 控制 Creator 主窗口。`open` 的窗口切换无需 Funplay。3.8.8 安装包启动入口里没有这两个参数对应的窗口切换逻辑。
+- 在 Windows 和 macOS 上，普通 `open` 默认采用 `--background`，显示 Creator 主窗口且不请求焦点。若 Creator 冷启动时自行切到前台，CLI 会尝试恢复原来的前台窗口或应用。显式传 `--foreground` 时，CLI 会请求焦点。`open` 的窗口操作无需 Funplay。
 
 本机核对的安装包文件包括 `app.asar!/launch/source/launch.ts`、`app.asar!/node_modules/@editor/setting/lib/browser/index.js` 和构建器的 `builtin/builder/@types/public/options.d.ts`。其中构建器类型声明位于安装包的 unpacked 目录。

@@ -12,7 +12,7 @@
 | `npm run check` | TypeScript 与 JavaScript 工具脚本检查通过。 |
 | npm 包清单与 API | 确认 `bin/cocos.js`、`dist/index.js`、`dist/index.d.ts` 及离线模块在清单中，包入口可导入。 |
 | 原生模板创建 | 使用 Windows 3.8.8 安装中的模板创建了 2D、3D 临时项目。 |
-| 窗口切换 | 临时项目后台启动后，普通 `open` 复用同一 PID，主窗口可见且获得焦点。 |
+| 窗口切换 | 在 `9be5e03` 上验证普通 `open` 能复用已有 Creator PID、显示主窗口并取得焦点。 |
 | 静态资源检查 | 对 本地 Creator 示例项目 检查了 3,261 个资源标识，报告 0 个确定错误、0 个未解析引用。一项资源实测查到 198 处序列化引用。 |
 | Prefab | 实际项目 Prefab 的节点树可读，同文件比较结果为无变化。自动测试验证字段级差异及只读行为。 |
 | 原生构建 | 临时 2D 项目的 Web Desktop 构建返回 Creator `36`、CLI `0`，生成了 `index.html`。 |
@@ -76,17 +76,17 @@ cocos prefab diff 'assets/ui/Hud.prefab' 'fixtures/HudChanged.prefab' --project 
 - 在可丢弃副本中制造缺失或孤立 Meta、重复 UUID、错误 JSON、以及 Prefab 序列化数组中的无效 `__id__`。`check --json` 应返回退出码 `2`，`issues` 包含对应路径。仅 `unresolved` 非空时，仍按确定错误数判断退出码。
 - 对只读命令前后的测试资源和 `.meta` 计算哈希，核对内容。动态字符串加载、二进制资产和展开后的外部嵌套 Prefab 需要单独验收。
 
-## 3. 普通 open、窗口显隐和 Funplay
+## 3. 普通 open、窗口焦点和 Funplay
 
-Windows 上用任一临时项目运行：
+Windows 或 macOS 上用任一临时项目运行：
 
 ```powershell
-cocos open --project $projectA --background --json
 cocos open --project $projectA --json
+cocos open --project $projectA --foreground --json
 cocos open --project $projectA --background --json
 ```
 
-核对后台启动后 `window.visible: false`，普通 `open` 返回 `reused: true` 且 `window.visible: true`，三次输出的 PID 相同。记录 `window.focused`，焦点获取由系统决定。在 Funplay 离线时复跑这组命令，窗口操作也应可用。需要等待编辑器退出时单测 `open --wait`。
+三次都核对 `window.visible: true` 和同一 PID，后两次应返回 `reused: true`。普通 `open` 和显式 `--background` 均返回 `window.mode: "background"`。运行这两条命令前先切到其他应用，核对执行后 Creator 主窗口显示、原应用仍在前台。显式 `--foreground` 会请求焦点，用 `window.frontmost` 检查 Creator 是否在前台。macOS 的 `window.focused: null` 表示 Creator 位于前台且主窗口的键盘焦点未核实。在 Funplay 离线时也可运行窗口操作。需要等待编辑器退出时单测 `open --wait`。
 
 启用该项目的 Funplay 服务后，执行：
 

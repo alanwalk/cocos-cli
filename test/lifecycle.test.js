@@ -37,6 +37,7 @@ function harness(t, overrides = {}) {
             return 4242;
         },
         isProcessAlive: () => state.alive,
+        captureForegroundWindow: async () => "1234",
         callMcpTool: async (request) => {
             state.toolCalls.push(request);
             state.running = false;
@@ -71,10 +72,11 @@ test("ensure reuses a verified existing project without resolving or launching a
 test("ensure uses the native window controller after verifying the target MCP", async (t) => {
     const h = harness(t);
     h.options.platform = "win32";
-    h.deps.setEditorWindow = async ({ pid, mode }) => {
+    h.deps.setEditorWindow = async ({ pid, mode, previousForeground }) => {
         assert.equal(pid, 4242);
         assert.equal(h.state.ready, true);
-        return { mode, visible: mode === "foreground", focused: false };
+        assert.equal(previousForeground, mode === "background" ? "1234" : null);
+        return { mode, visible: true, focused: false, frontmost: false };
     };
 
     const background = await ensureProject({ ...h.options, windowMode: "background" });
@@ -83,12 +85,12 @@ test("ensure uses the native window controller after verifying the target MCP", 
     assert.equal(background.launched, true);
     assert.equal(foreground.reused, true);
     assert.equal(h.state.launches, 1);
-    assert.deepEqual(background.window, { mode: "background", visible: false, focused: false });
-    assert.deepEqual(foreground.window, { mode: "foreground", visible: true, focused: false });
+    assert.deepEqual(background.window, { mode: "background", visible: true, focused: false, frontmost: false });
+    assert.deepEqual(foreground.window, { mode: "foreground", visible: true, focused: false, frontmost: false });
     assert.equal(h.state.toolCalls.length, 0);
 });
 
-test("open can launch hidden and restore an existing Creator without probing MCP", async (t) => {
+test("background and foreground open share a Creator without probing MCP", async (t) => {
     const h = harness(t);
     h.options.platform = "win32";
     h.deps.probeMcp = async () => assert.fail("open must not probe MCP");
@@ -99,16 +101,52 @@ test("open can launch hidden and restore an existing Creator without probing MCP
     };
     h.deps.setEditorWindow = async ({ pid, mode }) => {
         assert.equal(pid, 4242);
-        return { mode, visible: mode === "foreground", focused: false };
+        return { mode, visible: true, focused: false, frontmost: false };
     };
 
     const background = await openProjectWindow({ ...h.options, windowMode: "background" });
     const foreground = await openProjectWindow({ ...h.options, windowMode: "foreground" });
     assert.equal(background.launched, true);
+    assert.equal(background.window.visible, true);
     assert.equal(foreground.reused, true);
     assert.equal(h.state.launches, 1);
     assert.equal(foreground.window.visible, true);
     assert.equal(h.state.toolCalls.length, 0);
+});
+
+test("macOS background and explicit foreground opens reuse the same Creator", async (t) => {
+    const h = harness(t);
+    h.options.platform = "darwin";
+    h.deps.probeMcp = async () => assert.fail("open must not probe MCP");
+    const windowRequests = [];
+    h.deps.captureForegroundWindow = async () => {
+        assert.equal(h.state.running, false);
+        return "1234";
+    };
+    h.deps.setEditorWindow = async ({ pid, mode, previousForeground }) => {
+        assert.equal(pid, 4242);
+        windowRequests.push({ mode, previousForeground });
+        const frontmost = mode === "foreground";
+        return { mode, visible: true, focused: frontmost ? null : false, frontmost };
+    };
+
+    const options = { ...h.options, windowMode: "background" };
+    const first = await openProjectWindow(options);
+    const second = await openProjectWindow(options);
+    const foreground = await openProjectWindow({ ...options, windowMode: "foreground" });
+    assert.equal(first.launched, true);
+    assert.equal(second.reused, true);
+    assert.equal(foreground.reused, true);
+    assert.equal(h.state.launches, 1);
+    assert.equal(second.pid, first.pid);
+    assert.equal(foreground.pid, first.pid);
+    assert.deepEqual(windowRequests, [
+        { mode: "background", previousForeground: "1234" },
+        { mode: "background", previousForeground: null },
+        { mode: "foreground", previousForeground: null },
+    ]);
+    assert.deepEqual(second.window, { mode: "background", visible: true, focused: false, frontmost: false });
+    assert.deepEqual(foreground.window, { mode: "foreground", visible: true, focused: null, frontmost: true });
 });
 
 test("concurrent ensure calls launch only once and the next call reuses MCP", async (t) => {

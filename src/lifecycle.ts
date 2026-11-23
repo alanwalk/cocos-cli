@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 
 import { resolveCreator } from "./creator.js";
-import { assertWindowMode, setEditorWindow } from "./editor-window.js";
+import { assertWindowMode, captureForegroundWindow, setEditorWindow } from "./editor-window.js";
 import { CocosCliError } from "./errors.js";
 import { callMcpTool, discoverMcpEndpoints, probeMcp } from "./mcp.js";
 import { isProcessAlive, listCreatorProcesses, normalizeProjectPath } from "./processes.js";
@@ -16,6 +16,7 @@ const DEFAULTS = {
     listCreatorProcesses,
     isProcessAlive,
     launchDetached,
+    captureForegroundWindow,
     setEditorWindow,
     readProjectState,
     writeProjectState,
@@ -232,7 +233,7 @@ export async function connectProjectMcp(options: LifecycleOptions) {
     return { connection: inspected.connection, timeoutMs };
 }
 
-async function finishEnsure(options: LifecycleOptions, dep, inspected, creator, launchedPid, deadline) {
+async function finishEnsure(options: LifecycleOptions, dep, inspected, creator, launchedPid, deadline, previousForeground = null) {
     const pid = launchedPid && dep.isProcessAlive(launchedPid) ? launchedPid : inspected.matchingProcesses[0]?.pid ?? null;
     await dep.writeProjectState(options.project.root, {
         endpoint: inspected.connection.endpoint,
@@ -250,6 +251,7 @@ async function finishEnsure(options: LifecycleOptions, dep, inspected, creator, 
             mode: options.windowMode,
             timeoutMs: deadline - dep.now(),
             env: options.env,
+            previousForeground: pid === launchedPid ? previousForeground : null,
         });
         return { ...result, window };
     }
@@ -264,6 +266,7 @@ async function ensureUnlocked(options: LifecycleOptions, dep, deadline) {
     }
     let creator = null;
     let launchedPid = null;
+    let previousForeground = null;
     if (!inspected.matchingProcesses.length) {
         if (inspected.unknownProcesses.length) {
             throw error("EDITOR_PROJECT_UNKNOWN", "有 Creator 进程无法确定项目路径，未重复启动编辑器", [
@@ -280,6 +283,9 @@ async function ensureUnlocked(options: LifecycleOptions, dep, deadline) {
         creator = dep.resolveCreator(editorOptions(options));
         const allowUnverified = options.allowUnverifiedEditor ?? options.config?.editor?.allowUnverifiedVersion ?? false;
         assertEditorVersion(creator, { allowUnverified });
+        if (options.windowMode === "background") {
+            previousForeground = await dep.captureForegroundWindow({ timeoutMs: Math.min(3000, deadline - dep.now()), env: options.env });
+        }
         if (dep.now() >= deadline) throw error("EDITOR_READY_TIMEOUT", "启动等待已超时，未启动新的 Creator 进程");
         options.log?.(`启动 Creator ${creator.actualVersion ?? "（版本待 MCP 核验）"}：${options.project.root}`);
         launchedPid = await dep.launchDetached(creator.path, ["--project", options.project.root], {
@@ -302,7 +308,7 @@ async function ensureUnlocked(options: LifecycleOptions, dep, deadline) {
         inspected = await inspect(options, dep, deadline);
         assertNoFatalConnectionError(options, inspected);
         if (inspected.connection) {
-            return finishEnsure(options, dep, inspected, creator, launchedPid, deadline);
+            return finishEnsure(options, dep, inspected, creator, launchedPid, deadline, previousForeground);
         }
         // Never respawn in a loop: a failed/closed editor remains a clear error.
         if (launchedPid && !dep.isProcessAlive(launchedPid) && !inspected.matchingProcesses.length) {
@@ -345,10 +351,15 @@ export async function openProjectWindow(options: LifecycleOptions) {
         }
         let pid = matches[0]?.pid;
         const reused = Boolean(pid);
+        let previousForeground = null;
         if (dep.now() >= deadline) throw error("EDITOR_WINDOW_TIMEOUT", "等待目标项目的窗口切换超时");
         if (!reused) {
             const creator = dep.resolveCreator(editorOptions(options));
             assertEditorVersion(creator, { allowUnverified: true });
+            if (options.windowMode === "background") {
+                previousForeground = await dep.captureForegroundWindow({ timeoutMs: Math.min(3000, deadline - dep.now()), env: options.env });
+            }
+            if (dep.now() >= deadline) throw error("EDITOR_WINDOW_TIMEOUT", "等待目标项目的窗口切换超时");
             pid = await dep.launchDetached(creator.path, ["--project", options.project.root], {
                 cwd: options.project.root,
                 env: options.env,
@@ -360,6 +371,7 @@ export async function openProjectWindow(options: LifecycleOptions) {
             mode: options.windowMode,
             timeoutMs: deadline - dep.now(),
             env: options.env,
+            previousForeground,
         });
         return { ok: true, projectRoot: options.project.root, pid, reused, launched: !reused, window };
     }, { timeoutMs });

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { runCli as invokeCli } from "../dist/cli.js";
 import { createFakeCreator, createProjectFixture } from "./helpers.js";
 
 const cliPath = fileURLToPath(new URL("../bin/cocos.js", import.meta.url));
@@ -89,10 +90,38 @@ test("Commander generates nested help and rejects the removed MCP entry points",
     assert.equal(JSON.parse(open.stdout).error.code, "INVALID_ARGUMENT");
 });
 
+test("ordinary open uses window handling on Windows and macOS unless configured to wait", async (t) => {
+    const fixture = createProjectFixture();
+    t.after(fixture.cleanup);
+    mkdirSync(join(fixture.root, "temp"));
+    writeFileSync(join(fixture.root, "temp", "cocos-cli"), "Block window handling before it queries processes");
+    writeFileSync(join(fixture.root, "wait.json"), JSON.stringify({ open: { wait: true } }));
+    const args = ["open", "--json", "--editor", join(fixture.root, "missing-editor")];
+
+    for (const [platform, flags, expectedCode] of [
+        ["darwin", [], "STATE_PATH_UNSAFE"],
+        ["win32", [], "STATE_PATH_UNSAFE"],
+        ["darwin", ["--foreground"], "STATE_PATH_UNSAFE"],
+        ["darwin", ["--config", "wait.json"], "CREATOR_NOT_FOUND"],
+        ["linux", [], "CREATOR_NOT_FOUND"],
+        ["linux", ["--foreground"], "EDITOR_WINDOW_UNSUPPORTED"],
+    ]) {
+        const output = [];
+        const code = await invokeCli([...args, ...flags], {
+            cwd: fixture.root,
+            platform,
+            output: (message) => output.push(message),
+        });
+        assert.equal(code, 1);
+        assert.equal(JSON.parse(output.join("\n")).error.code, expectedCode, `${platform} ${flags.join(" ")}`);
+    }
+});
+
 test("Commander keeps JSON errors for invalid options and conflicts", () => {
     for (const args of [
         ["--timeout-ms", "0", "mcp", "tools", "--json"],
         ["open", "--foreground", "--background", "--json"],
+        ["open", "--wait", "--foreground", "--json"],
         ["build", "--debug", "--release", "--json"],
         ["mcp", "register", "--json"],
         ["mcp", "register", "--client", "invalid", "--json"],

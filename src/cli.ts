@@ -8,6 +8,7 @@ import { Command, CommanderError, InvalidArgumentError, Option } from "commander
 import { assertBuildAllowed, createBuildArguments, resolveStartScene } from "./build.js";
 import { loadConfig } from "./config.js";
 import { resolveCreator } from "./creator.js";
+import { supportsEditorWindowModes } from "./editor-window.js";
 import { CocosCliError } from "./errors.js";
 import { manageFunplayExtension } from "./funplay-extension.js";
 import { assertEditorVersion, connectProjectMcp, ensureProject, inspectProject, openProjectWindow, restartProject, stopProject } from "./lifecycle.js";
@@ -134,8 +135,8 @@ async function runOpen(options: Required<CliContext>, values: CliValues) {
     const projectContext = loadProjectContext(options, values);
     const lifecycleOptions = makeLifecycleOptions(options, values, projectContext);
     const waitForExit = values.wait ?? lifecycleOptions.config.open.wait ?? false;
-    if (options.platform === "win32" && !waitForExit && !lifecycleOptions.windowMode) {
-        lifecycleOptions.windowMode = "foreground";
+    if (!waitForExit && supportsEditorWindowModes(options.platform)) {
+        lifecycleOptions.windowMode ??= "background";
     }
     if (lifecycleOptions.windowMode) {
         const result = await openProjectWindow(lifecycleOptions);
@@ -253,10 +254,9 @@ function makeLifecycleOptions(options: Required<CliContext>, values: CliValues, 
 }
 
 function printWindowResult(window, output) {
-    if (window.mode === "background") output("Creator 主窗口已隐藏。");
-    if (window.mode === "foreground") {
-        output(window.focused ? "Creator 主窗口已显示并获得焦点。" : "Creator 主窗口已显示，当前未获得焦点。");
-    }
+    if (window.focused === true) output("Creator 主窗口已显示，当前拥有焦点。");
+    else if (window.focused === false) output("Creator 主窗口已显示，当前未获得焦点。");
+    else output("Creator 主窗口已显示，Creator 位于前台，键盘焦点未核实。");
 }
 
 function printLifecycleResult(command, result, output) {
@@ -371,7 +371,7 @@ function registerCommands(options: Required<CliContext>, setExitCode: (code: num
         .option("--start-scene <UUID>", "覆盖启动场景");
     action(info, (values) => runInfo(options, values));
 
-    const open = program.command("open").description("打开或显示 Creator 主窗口")
+    const open = program.command("open").description("打开或显示 Creator 主窗口（Windows、macOS 默认不请求焦点）")
         .addOption(new Option("--wait", "等待 Creator 退出").conflicts(["foreground", "background"]));
     addWindowOptions(open);
     action(open, (values) => runOpen(options, values));
@@ -448,8 +448,8 @@ function registerCommands(options: Required<CliContext>, setExitCode: (code: num
 }
 
 function addWindowOptions(command: Command) {
-    command.addOption(new Option("--foreground", "Windows：显示主窗口并请求焦点").conflicts("background"))
-        .option("--background", "Windows：隐藏主窗口");
+    command.addOption(new Option("--foreground", "Windows、macOS：显示主窗口并请求焦点").conflicts("background"))
+        .option("--background", "Windows、macOS：显示主窗口，不请求焦点");
 }
 
 export async function runCli(argv: string[], context: CliContext = {}) {
