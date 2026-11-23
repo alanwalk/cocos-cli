@@ -35,6 +35,16 @@ test("--help 列出核心命令", () => {
     assert.doesNotMatch(result.stdout, /^  ensure\b/m);
 });
 
+test("mcp preview accepts Edge and Chrome browser selectors", () => {
+    const help = runCli(["mcp", "preview", "--help"]);
+    assert.equal(help.status, 0, help.stderr);
+    assert.match(help.stdout, /Usage: cocos mcp preview \[options\]/);
+    assert.match(help.stdout, /choices: "edge", "chrome"/);
+    const unsupported = runCli(["mcp", "preview", "--browser", "firefox", "--json"]);
+    assert.equal(unsupported.status, 1);
+    assert.equal(JSON.parse(unsupported.stdout).error.code, "INVALID_ARGUMENT");
+});
+
 test("info 拒绝多余的位置参数", () => {
     const result = runCli(["info", "unexpected"]);
 
@@ -76,7 +86,7 @@ test("Commander generates nested help and rejects the removed MCP entry points",
     assert.match(help.stdout, /Usage: cocos mcp register/);
     assert.match(help.stdout, /--client/);
     assert.match(help.stdout, /--project/);
-    for (const oldCommand of ["ensure", "status", "doctor", "stop", "restart"]) {
+    for (const oldCommand of ["ensure", "status", "doctor", "preview", "stop", "restart"]) {
         const result = runCli([oldCommand, "--json"]);
         assert.equal(result.status, 1);
         assert.equal(result.stderr, "");

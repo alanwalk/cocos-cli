@@ -42,8 +42,21 @@ npx @alanwalk/cocos-cli --version
 | `cocos mcp register --client <客户端> [--skills]` | 注册客户端 MCP，可同时安装 Funplay Skills。 |
 | `cocos mcp status` | 查看目标项目的编辑器和 MCP 状态。 |
 | `cocos mcp doctor` | 诊断 Creator 版本、进程和 MCP 连接。 |
+| `cocos mcp preview [--browser edge\|chrome]` | 在独立浏览器窗口打开当前场景，采集该标签页的运行日志。 |
 | `cocos mcp stop [--save]` | 正常退出 Creator，可先保存场景。 |
 | `cocos mcp restart [--save]` | 正常重启 Creator，可先保存场景。 |
+
+### 浏览器预览日志
+
+先打开目标 Creator 项目并确认 Funplay MCP 在线，在预览工具栏选择浏览器模式，再运行：
+
+```powershell
+cocos mcp preview --project C:\Workspace\evo-cocos --browser edge
+```
+
+命令需要本机安装 Edge 或 Chrome，以及支持内置 WebSocket 的 Node.js（推荐 22 或更高版本）。省略 `--browser` 会自动查找浏览器，Windows 优先 Edge，macOS 和 Linux 优先 Chrome。
+
+CLI 使用临时浏览器配置，只打开一个游戏标签页。Console、未捕获的脚本异常和浏览器报告的网络错误实时写入项目的 `temp/cocos-cli/preview-*.jsonl`，单次上限 8 MiB。关闭测试标签页或按 Ctrl+C 即可结束，日志会保留。`--json` 在结束时输出日志路径、记录数和停止原因，采集提示走 stderr。
 
 ## 参考
 

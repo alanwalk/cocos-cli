@@ -16,6 +16,8 @@ import { FUNPLAY_CLIENTS, registerFunplay, type FunplayClient } from "./funplay-
 import { loadProject } from "./project.js";
 import { packageManifest } from "./package-info.js";
 import { launchDetached, waitForChild } from "./runner.js";
+import { callMcpTool } from "./mcp.js";
+import { capturePreviewLogs, getBrowserPreviewUrl, PREVIEW_BROWSERS, resolvePreviewBrowser } from "./preview.js";
 
 interface CliValues {
     project?: string;
@@ -30,6 +32,7 @@ interface CliValues {
     buildConfig?: string;
     logDest?: string;
     mcpUrl?: string;
+    browser?: typeof PREVIEW_BROWSERS[number];
     client?: FunplayClient;
     skills?: boolean;
     scope?: "project" | "user";
@@ -303,6 +306,31 @@ async function runLifecycle(command: LifecycleCommand, options: Required<CliCont
     return result.ok ? 0 : 2;
 }
 
+async function runPreview(options: Required<CliContext>, values: CliValues) {
+    const context = loadProjectContext(options, values);
+    const projectRoot = context.project.root;
+    const browser = resolvePreviewBrowser(values.browser, options);
+    const lifecycle = makeLifecycleOptions(options, values, context);
+    const { connection, timeoutMs } = await connectProjectMcp(lifecycle);
+    const { data } = await callMcpTool({ connection, name: "get_preview_mode", timeoutMs });
+    const url = getBrowserPreviewUrl(data);
+    const started = (logPath: string) => options.errorOutput(
+        `已打开 ${browser.name} 预览。关闭测试标签页或按 Ctrl+C 结束采集。\n日志：${logPath}`,
+    );
+    const cleanupFailed = (profile: string) => options.errorOutput(`浏览器临时配置目录未清理：${profile}`);
+    const capture = await capturePreviewLogs({
+        projectRoot, browser, url, env: options.env, timeoutMs: values.timeoutMs,
+        onStart: started, onCleanupError: cleanupFailed,
+    });
+    if (values.json) {
+        const previewUrl = url.origin + url.pathname;
+        options.output(JSON.stringify({ command: "mcp preview", ok: true, projectRoot, browser: browser.name, url: previewUrl, ...capture }, null, 2));
+    } else {
+        options.output(`采集结束，记录 ${capture.entries} 条日志。${capture.dropped ? `达到容量上限，略过 ${capture.dropped} 条。` : ""}\n${capture.logPath}`);
+    }
+    return 0;
+}
+
 function registerCommands(options: Required<CliContext>, setExitCode: (code: number) => void) {
     const program = new Command("cocos")
         .description("在终端管理 Cocos Creator 项目、资源、构建和 Funplay MCP")
@@ -414,6 +442,9 @@ function registerCommands(options: Required<CliContext>, setExitCode: (code: num
     action(ensure, (values) => runLifecycle("ensure", options, values));
     action(mcp.command("status").description("查看目标项目进程和 MCP 状态"), (values) => runLifecycle("status", options, values));
     action(mcp.command("doctor").description("诊断 Creator 版本、进程和 MCP"), (values) => runLifecycle("doctor", options, values));
+    const preview = mcp.command("preview").description("打开当前场景的浏览器预览并持续采集日志")
+        .addOption(new Option("--browser <浏览器>", "选择本机浏览器，默认自动查找").choices(PREVIEW_BROWSERS));
+    action(preview, (values) => runPreview(options, values));
     const stop = mcp.command("stop").description("通过 Funplay 请求 Creator 正常退出")
         .option("--save", "退出前保存当前场景");
     action(stop, (values) => runLifecycle("stop", options, values));

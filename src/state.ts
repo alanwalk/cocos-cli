@@ -60,6 +60,12 @@ async function prepareDirectory(paths, create) {
     return true;
 }
 
+export async function prepareProjectStateDirectory(projectRoot: string) {
+    const paths = getProjectStatePaths(projectRoot);
+    await prepareDirectory(paths, true);
+    return paths.directory;
+}
+
 async function readJson(path) {
     let handle;
     try {
